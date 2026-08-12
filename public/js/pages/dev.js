@@ -4,7 +4,7 @@ import { toast } from '../components/toast.js';
 import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
-import { projectCounts, todayStr, uid } from '../logic.js';
+import { projectCounts, todayStr, uid, moveTask } from '../logic.js';
 
 let selectedId = null;
 const STATUSES = [
@@ -160,9 +160,11 @@ export async function render(container) {
     board.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px;';
     for (const st of STATUSES) {
       const col = document.createElement('div');
-      col.className = 'card';
+      col.className = 'card board-col';
+      col.dataset.status = st.key;
       col.style.cssText = 'padding:12px;';
-      const colTasks = (project.tasks || []).filter(t => t.status === st.key);
+      const colTasks = (project.tasks || []).filter(t => t.status === st.key)
+        .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
       const colHead = document.createElement('div');
       colHead.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
       const colTitle = document.createElement('div');
@@ -181,6 +183,29 @@ export async function render(container) {
         for (const t of colTasks) col.append(taskRow(project.id, t, container));
       }
       board.append(col);
+
+      // 拖拽：列作为放置目标
+      col.addEventListener('dragover', e => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        col.classList.add('drop-target');
+      });
+      col.addEventListener('dragleave', e => {
+        if (!col.contains(e.relatedTarget)) col.classList.remove('drop-target');
+      });
+      col.addEventListener('drop', e => {
+        e.preventDefault();
+        col.classList.remove('drop-target');
+        const id = e.dataTransfer.getData('text/plain');
+        if (!id) return;
+        const idx = dropIndex(e, col);
+        mutate(s => {
+          const p = s.projects.find(x => x.id === project.id);
+          if (p) moveTask(p, id, st.key, idx);
+        });
+        toast('已移动');
+        render(container);
+      });
     }
     right.append(board);
 
@@ -246,10 +271,27 @@ export async function render(container) {
   container.append(wrap);
 
   // ---------- 内部函数 ----------
+  // 计算放置位置：落在某张任务卡的上半部分则插到它前面，否则插到后面
+  function dropIndex(e, col) {
+    const rows = [...col.querySelectorAll('.task-row')];
+    const at = rows.find(r => e.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2);
+    return at ? rows.indexOf(at) : rows.length;
+  }
+
   function taskRow(projId, t, ctx) {
     const row = document.createElement('div');
-    row.className = 'row';
-    row.style.cssText = 'cursor:pointer;flex-wrap:wrap;';
+    row.className = 'row task-row';
+    row.style.cssText = 'cursor:grab;flex-wrap:wrap;';
+    row.draggable = true;
+    row.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', t.id);
+      e.dataTransfer.effectAllowed = 'move';
+      row.classList.add('dragging');
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      ctx.querySelectorAll('.board-col').forEach(c => c.classList.remove('drop-target'));
+    });
     const inner = document.createElement('div');
     inner.style.cssText = 'flex:1;min-width:0;';
     const title = document.createElement('div');

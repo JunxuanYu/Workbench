@@ -172,6 +172,24 @@ export function logsOnDate(projects, date) {
   return n;
 }
 
+// 拖拽移动任务：改状态 + 在目标列按 order 重新编号排序（同列拖动也可重排）
+// targetIndex 为目标列排序后的插入位置，越界自动收拢到边界
+export function moveTask(project, taskId, status, targetIndex) {
+  const tasks = project.tasks || [];
+  const i = tasks.findIndex(t => t.id === taskId);
+  if (i === -1) return { from: null, to: null, index: -1, changed: false };
+  const task = tasks[i];
+  const from = task.status;
+  task.status = status;
+  const group = tasks.filter(t => t.status === status)
+    .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
+  const idx = Math.max(0, Math.min(targetIndex, group.length - 1));
+  const ordered = group.filter(t => t.id !== taskId);
+  ordered.splice(idx, 0, task);
+  ordered.forEach((t, n) => { t.order = n; });
+  return { from, to: status, index: idx, changed: true };
+}
+
 // ---------- 咨询工作 ----------
 export function clientFeeSummary(fees) {
   let received = 0, pending = 0;

@@ -6,7 +6,7 @@ import {
   todayStr, addDays, formatDate, weekdayOf, monthKey, addMonths,
   weekStartOf, weekEndOf, isInRange,
   assembleToday, overdueItems, planProgress, formatPlanTime, validateTimeRange,
-  projectCounts, allDevDoing, logsOnDate,
+  projectCounts, allDevDoing, logsOnDate, moveTask,
   clientFeeSummary, consultWeekCount, allPendingFees,
   dietProgress, daysSinceLastMeal,
   ledgerMonthStats, expenseToday, categoryRanking,
@@ -159,6 +159,53 @@ test('P4 今天的工作日志条数（跨项目统计）', () => {
   ];
   assert.equal(logsOnDate(projects, '2026-08-11'), 2);
   assert.equal(logsOnDate(projects, '2026-08-09'), 0);
+});
+
+test('P4 拖拽：跨列移动并重排目标列 order', () => {
+  const p = {
+    tasks: [
+      { id: 'a', title: 'A', status: 'todo' },
+      { id: 'b', title: 'B', status: 'todo' },
+      { id: 'c', title: 'C', status: 'doing', order: 0 }
+    ]
+  };
+  const r = moveTask(p, 'a', 'doing', 0);
+  assert.equal(r.from, 'todo');
+  assert.equal(r.to, 'doing');
+  assert.equal(p.tasks.find(t => t.id === 'a').status, 'doing');
+  const doing = p.tasks.filter(t => t.status === 'doing').sort((x, y) => x.order - y.order);
+  assert.deepEqual(doing.map(t => t.id), ['a', 'c']);
+  assert.deepEqual(doing.map(t => t.order), [0, 1]);
+  const todo = p.tasks.filter(t => t.status === 'todo');
+  assert.deepEqual(todo.map(t => t.id), ['b'], '原列其余任务不受影响');
+});
+
+test('P4 拖拽：同列重排（拖到列首）', () => {
+  const p = { tasks: [
+    { id: 'a', status: 'todo', order: 0 },
+    { id: 'b', status: 'todo', order: 1 },
+    { id: 'c', status: 'todo', order: 2 }
+  ] };
+  moveTask(p, 'c', 'todo', 0);
+  const todo = p.tasks.filter(t => t.status === 'todo').sort((x, y) => x.order - y.order);
+  assert.deepEqual(todo.map(t => t.id), ['c', 'a', 'b']);
+});
+
+test('P4 拖拽：目标索引越界收拢到边界', () => {
+  const p = { tasks: [
+    { id: 'a', status: 'todo', order: 0 },
+    { id: 'b', status: 'todo', order: 1 }
+  ] };
+  moveTask(p, 'a', 'todo', 99);
+  const todo = p.tasks.filter(t => t.status === 'todo').sort((x, y) => x.order - y.order);
+  assert.deepEqual(todo.map(t => t.id), ['b', 'a']);
+});
+
+test('P4 拖拽：任务不存在时不做任何修改', () => {
+  const p = { tasks: [{ id: 'a', status: 'todo' }] };
+  const r = moveTask(p, 'nope', 'doing', 0);
+  assert.equal(r.changed, false);
+  assert.equal(p.tasks[0].status, 'todo');
 });
 
 // ---------- P5：咨询工作 ----------
