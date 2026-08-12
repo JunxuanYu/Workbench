@@ -12,6 +12,7 @@ import {
   ledgerMonthStats, expenseToday, categoryRanking, categoryPercentages,
   monthBudget, setMonthBudget, budgetStatus,
   computeHomeSummary,
+  formatMemoTime, parseMemoTime, memoIsDue, sortMemos,
   addCategory, canDeleteCategory
 } from '../public/js/logic.js';
 
@@ -364,6 +365,51 @@ test('P8 首页摘要：各模块数字聚合一致', () => {
   assert.equal(s.mealsToday, 1);
   assert.equal(s.expenseToday, 35);
   assert.equal(s.monthBalance, 7965);    // 8000 - 35
+});
+
+// ---------- P8：首页备忘 ----------
+test('P8 备忘时间：parseMemoTime 组合日期与时间', () => {
+  const d = parseMemoTime({ date: '2026-08-12', time: '15:30' });
+  assert.equal(d.getFullYear(), 2026);
+  assert.equal(d.getMonth(), 7); // 8月
+  assert.equal(d.getDate(), 12);
+  assert.equal(d.getHours(), 15);
+  assert.equal(d.getMinutes(), 30);
+  assert.equal(parseMemoTime({ date: '2026-08-12' }).getHours(), 0, '只有日期时时刻为零点');
+  assert.equal(parseMemoTime({}), null);
+  assert.equal(parseMemoTime(null), null);
+});
+
+test('P8 备忘时间：formatMemoTime 展示文本', () => {
+  assert.equal(formatMemoTime({ date: '2026-08-12', time: '15:30' }), '8月12日 周三 15:30');
+  assert.equal(formatMemoTime({ date: '2026-08-12' }), '8月12日 周三');
+  assert.equal(formatMemoTime({}), null);
+  assert.equal(formatMemoTime(null), null);
+});
+
+test('P8 备忘时间：memoIsDue 判定日期/时刻是否已过', () => {
+  const now = new Date(2026, 7, 12, 12, 0, 0); // 2026-08-12 12:00
+  assert.equal(memoIsDue({ date: '2026-08-11' }, now), true, '昨天已过');
+  assert.equal(memoIsDue({ date: '2026-08-12', time: '11:00' }, now), true, '今天时刻已过');
+  assert.equal(memoIsDue({ date: '2026-08-12', time: '13:00' }, now), false, '今天时刻未到');
+  assert.equal(memoIsDue({ date: '2026-08-12' }, now), false, '今天全天任务不算过期');
+  assert.equal(memoIsDue({ date: '2026-08-13' }, now), false, '明天未到');
+  assert.equal(memoIsDue({}, now), false);
+  assert.equal(memoIsDue(null, now), false);
+});
+
+test('P8 备忘排序：置顶 → 提醒时间升序 → 无时间按创建倒序', () => {
+  const memos = [
+    { id: 'a', pinned: false, createdAt: '2026-08-12T09:00:00Z', date: '2026-08-15' },
+    { id: 'b', pinned: true, createdAt: '2026-08-11T09:00:00Z' },
+    { id: 'c', pinned: false, createdAt: '2026-08-12T08:00:00Z', date: '2026-08-13', time: '10:00' },
+    { id: 'd', pinned: false, createdAt: '2026-08-10T09:00:00Z', date: '2026-08-13', time: '09:00' },
+    { id: 'e', pinned: false, createdAt: '2026-08-12T07:00:00Z' }
+  ];
+  const ids = sortMemos(memos).map(m => m.id);
+  assert.deepEqual(ids, ['b', 'd', 'c', 'a', 'e']);
+  assert.deepEqual(sortMemos([]), []);
+  assert.deepEqual(sortMemos(undefined), []);
 });
 
 // ---------- P9：分类管理 ----------

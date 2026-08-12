@@ -1,10 +1,11 @@
-// 首页总览：一打开就心里有数——5张摘要卡 + 快速备忘
+// 首页总览：一打开就心里有数——5张摘要卡 + 快速备忘（可设提醒日期时间）
 import { getState, mutate } from '../store.js';
 import { toast } from '../components/toast.js';
 import { confirmDialog } from '../components/confirm.js';
+import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { navigate } from '../router.js';
-import { computeHomeSummary, dietProgress, formatDate, todayStr, uid } from '../logic.js';
+import { computeHomeSummary, formatDate, todayStr, uid, formatMemoTime, memoIsDue, sortMemos } from '../logic.js';
 
 const fmt = n => (Number.isInteger(n) ? n.toLocaleString('zh-CN') : Number(n).toFixed(2));
 
@@ -66,7 +67,7 @@ export async function render(container) {
   }
   container.append(grid);
 
-  // ---------- 快速备忘 ----------
+  // ---------- 快速备忘（可选提醒日期/时间） ----------
   const memoCard = document.createElement('div');
   memoCard.className = 'card';
   const memoTitle = document.createElement('div');
@@ -79,25 +80,41 @@ export async function render(container) {
   const input = document.createElement('input');
   input.type = 'text';
   input.placeholder = '记一句... 回车添加';
+  const dateInput = document.createElement('input');
+  dateInput.type = 'date';
+  dateInput.title = '提醒日期（可选）';
+  dateInput.style.cssText = 'width:136px;flex-shrink:0;';
+  const timeInput = document.createElement('input');
+  timeInput.type = 'time';
+  timeInput.title = '提醒时间（可选，填了时间没填日期则默认今天）';
+  timeInput.style.cssText = 'width:96px;flex-shrink:0;';
   const addBtn = document.createElement('button');
   addBtn.className = 'btn btn-sm btn-primary';
   addBtn.textContent = '+ 添加';
   const doAdd = () => {
     const text = input.value.trim();
     if (!text) return;
+    let date = dateInput.value;
+    const time = timeInput.value;
+    if (time && !date) date = todayStr(); // 有提醒时间无日期 → 默认今天
     mutate(s => {
-      s.memos.push({ id: uid('m'), text, pinned: false, createdAt: new Date().toISOString() });
+      const memo = { id: uid('m'), text, pinned: false, createdAt: new Date().toISOString() };
+      if (date) memo.date = date;
+      if (time) memo.time = time;
+      s.memos.push(memo);
     });
     input.value = '';
+    dateInput.value = '';
+    timeInput.value = '';
     toast('已添加');
     render(container);
   };
   input.onkeydown = e => { if (e.key === 'Enter') doAdd(); };
   addBtn.onclick = doAdd;
-  addRow.append(input, addBtn);
+  addRow.append(input, dateInput, timeInput, addBtn);
   memoCard.append(addRow);
 
-  const memos = [...(state.memos || [])].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const memos = sortMemos(state.memos);
   if (!memos.length) {
     memoCard.append(emptyEl('还没有备忘，记一句吧'));
   } else {
@@ -114,8 +131,21 @@ export async function render(container) {
         badge.textContent = '置顶';
         row.append(badge);
       }
+      const mTime = formatMemoTime(m);
+      if (mTime) {
+        const badge = document.createElement('span');
+        badge.className = 'badge ' + (memoIsDue(m) ? 'badge-red' : 'badge-blue');
+        badge.textContent = `🕐 ${mTime}`;
+        badge.title = memoIsDue(m) ? '已到提醒时间' : '提醒时间';
+        row.append(badge);
+      }
       const actions = document.createElement('div');
       actions.className = 'row-actions';
+      const editB = document.createElement('button');
+      editB.className = 'btn-icon';
+      editB.textContent = '✏️';
+      editB.title = '编辑';
+      editB.onclick = () => editMemoModal(m, container);
       const pinB = document.createElement('button');
       pinB.className = 'btn-icon';
       pinB.textContent = m.pinned ? '⭐' : '☆';
@@ -139,10 +169,37 @@ export async function render(container) {
         toast('已删除');
         render(container);
       };
-      actions.append(pinB, delB);
+      actions.append(editB, pinB, delB);
       row.append(actions);
       memoCard.append(row);
     }
   }
   container.append(memoCard);
+}
+
+function editMemoModal(m, ctx) {
+  openForm({
+    title: '编辑备忘',
+    fields: [
+      { key: 'text', label: '内容', type: 'text', required: true },
+      { key: 'date', label: '提醒日期（可选）', type: 'date' },
+      { key: 'time', label: '提醒时间（可选）', type: 'time' },
+      { key: 'pinned', label: '置顶', type: 'select', options: [{ value: '1', label: '⭐ 置顶' }, { value: '0', label: '普通' }] }
+    ],
+    values: { text: m.text, date: m.date || '', time: m.time || '', pinned: m.pinned ? '1' : '0' },
+    onSubmit: async v => {
+      let date = v.date;
+      if (v.time && !date) date = todayStr();
+      mutate(s => {
+        const item = s.memos.find(x => x.id === m.id);
+        if (!item) return;
+        item.text = v.text.trim();
+        item.pinned = v.pinned === '1';
+        if (date) item.date = date; else delete item.date;
+        if (v.time) item.time = v.time; else delete item.time;
+      });
+      toast('已保存');
+      render(ctx);
+    }
+  });
 }

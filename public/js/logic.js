@@ -299,6 +299,47 @@ export function categoryPercentages(ranking) {
   return ranking.map(r => ({ name: r.name, total: r.total, pct: Math.round(r.total / total * 10000) / 100 }));
 }
 
+// ---------- 备忘 ----------
+// 备忘提醒时间：date（YYYY-MM-DD）必填才生效，time（HH:mm）可选
+export function parseMemoTime(m) {
+  if (!m || !m.date) return null;
+  const d = parseDate(m.date);
+  if (m.time && /^\d{2}:\d{2}$/.test(String(m.time))) {
+    const [h, min] = m.time.split(':').map(Number);
+    d.setHours(h, min, 0, 0);
+  }
+  return d;
+}
+
+export function formatMemoTime(m) {
+  if (!m || !m.date) return null;
+  const base = formatDate(m.date);
+  return m.time ? `${base} ${m.time}` : base;
+}
+
+// 备忘是否已到提醒时间：日期已过 → 是；今天且有时刻且时刻已到 → 是；其余否
+export function memoIsDue(m, now = new Date()) {
+  if (!m || !m.date) return false;
+  const today = dateStrFrom(now);
+  if (m.date < today) return true;
+  if (m.date > today) return false;
+  if (!m.time) return false;
+  return String(m.time) <= `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+}
+
+// 备忘排序：置顶 → 有提醒时间的按时间升序（最早的在最前）→ 其余按创建时间倒序
+export function sortMemos(memos) {
+  const t = m => {
+    const d = parseMemoTime(m);
+    return d ? d.getTime() : Infinity;
+  };
+  return [...(memos || [])].sort((a, b) =>
+    (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) ||
+    t(a) - t(b) ||
+    (b.createdAt || '').localeCompare(a.createdAt || '')
+  );
+}
+
 // ---------- 首页汇总 ----------
 export function computeHomeSummary(state, today) {
   const items = assembleToday(state.plans || {}, today);
