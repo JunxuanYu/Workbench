@@ -146,6 +146,14 @@ test('P2 外壳：index.html 包含7个导航项与内容区', async () => {
   assert.ok(html.includes('id="modal-root"'));
 });
 
+test('P2 外壳：导航顺序为「饮食计划」在「账目计划」之后', async () => {
+  const html = await (await fetch(`${base}/`)).text();
+  const iMoney = html.indexOf('data-route="money"');
+  const iDiet = html.indexOf('data-route="diet"');
+  assert.ok(iMoney !== -1 && iDiet !== -1, '两个导航项都应存在');
+  assert.ok(iDiet > iMoney, '饮食计划应排在账目计划之后');
+});
+
 test('P2 外壳：页面模块语法有效（Node 可解析）', async () => {
   const mod = await import('../public/js/pages/today.js');
   assert.equal(typeof mod.render, 'function');

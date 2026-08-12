@@ -3,11 +3,11 @@ import { render as home } from './pages/home.js';
 import { render as today } from './pages/today.js';
 import { render as dev } from './pages/dev.js';
 import { render as consult } from './pages/consult.js';
-import { render as diet } from './pages/diet.js';
 import { render as money } from './pages/money.js';
+import { render as diet } from './pages/diet.js';
 import { render as settings } from './pages/settings.js';
 
-const routes = { home, today, dev, consult, diet, money, settings };
+const routes = { home, today, dev, consult, money, diet, settings };
 let currentKey = null;
 
 export function initRouter() {
