@@ -5,7 +5,7 @@ import {
   defaultData, validateData,
   todayStr, addDays, formatDate, weekdayOf, monthKey, addMonths,
   weekStartOf, weekEndOf, isInRange,
-  assembleToday, overdueItems, planProgress,
+  assembleToday, overdueItems, planProgress, formatPlanTime, validateTimeRange,
   projectCounts, allDevDoing, logsOnDate,
   clientFeeSummary, consultWeekCount, allPendingFees,
   dietProgress, daysSinceLastMeal,
@@ -110,6 +110,26 @@ test('P3 进度统计：总数与完成数正确', () => {
   const items = [{ done: true }, { done: true }, { done: false }];
   assert.deepEqual(planProgress(items), { total: 3, done: 2 });
   assert.deepEqual(planProgress([]), { total: 0, done: 0 });
+});
+
+test('P3 时间段：formatPlanTime 组合开始/结束时间，单边与空值正确', () => {
+  assert.equal(formatPlanTime({ timeStart: '09:00', timeEnd: '10:30' }), '09:00–10:30');
+  assert.equal(formatPlanTime({ timeStart: '09:00' }), '09:00');
+  assert.equal(formatPlanTime({ timeEnd: '10:30' }), '10:30');
+  assert.equal(formatPlanTime({ timeStart: ' 09:00 ' }), '09:00');
+  assert.equal(formatPlanTime({}), null);
+  assert.equal(formatPlanTime({ timeStart: '', timeEnd: '' }), null);
+  assert.equal(formatPlanTime(null), null);
+});
+
+test('P3 时间段：validateTimeRange 校验格式与先后顺序', () => {
+  assert.deepEqual(validateTimeRange('09:00', '10:30'), { ok: true });
+  assert.deepEqual(validateTimeRange('', ''), { ok: true });
+  assert.deepEqual(validateTimeRange('09:00', ''), { ok: true });
+  assert.deepEqual(validateTimeRange('', '10:30'), { ok: true });
+  assert.deepEqual(validateTimeRange('09:00', '08:00'), { ok: false, error: '结束时间不能早于开始时间' });
+  assert.deepEqual(validateTimeRange('9:00', ''), { ok: false, error: '开始时间格式不正确' });
+  assert.deepEqual(validateTimeRange('', '25:00'), { ok: false, error: '结束时间格式不正确' });
 });
 
 // ---------- P4：开发工作 ----------

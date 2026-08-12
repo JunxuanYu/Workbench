@@ -5,7 +5,7 @@ import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { dateNav } from '../components/dateNav.js';
-import { assembleToday, overdueItems, todayStr, addDays, uid } from '../logic.js';
+import { assembleToday, overdueItems, todayStr, addDays, uid, formatPlanTime, validateTimeRange } from '../logic.js';
 
 let viewDate = todayStr();
 let tab = 'all'; // all | today | tomorrow | overdue
@@ -25,30 +25,42 @@ export async function render(container) {
     onChange: v => { viewDate = v; render(container); }
   }));
 
-  // 添加框：明天标签下默认加到明天
+  // 添加框：明天标签下默认加到明天；可填开始/结束时间（可选）
   const addRow = document.createElement('div');
   addRow.style.cssText = 'display:flex;gap:8px;margin-bottom:14px;';
   const input = document.createElement('input');
   input.type = 'text';
   input.placeholder = tab === 'tomorrow' ? '加一件明天的事，回车即添加...' : '加一件事，回车即添加...';
+  const startTime = document.createElement('input');
+  startTime.type = 'time';
+  startTime.title = '开始时间（可选）';
+  startTime.style.cssText = 'width:96px;flex-shrink:0;';
+  const endTime = document.createElement('input');
+  endTime.type = 'time';
+  endTime.title = '结束时间（可选）';
+  endTime.style.cssText = 'width:96px;flex-shrink:0;';
   const addBtn = document.createElement('button');
   addBtn.className = 'btn btn-primary';
   addBtn.textContent = '+ 添加';
   const doAdd = () => {
     const text = input.value.trim();
     if (!text) return;
+    const check = validateTimeRange(startTime.value, endTime.value);
+    if (!check.ok) { toast(check.error); return; }
     const targetDate = tab === 'tomorrow' ? addDays(viewDate, 1) : viewDate;
     mutate(s => {
       if (!s.plans[targetDate]) s.plans[targetDate] = [];
-      s.plans[targetDate].push({ id: uid('p'), text, done: false, important: false, note: '', origDate: targetDate });
+      s.plans[targetDate].push({ id: uid('p'), text, done: false, important: false, note: '', origDate: targetDate, timeStart: startTime.value, timeEnd: endTime.value });
     });
     input.value = '';
+    startTime.value = '';
+    endTime.value = '';
     toast('已添加');
     render(container);
   };
   input.onkeydown = e => { if (e.key === 'Enter') doAdd(); };
   addBtn.onclick = doAdd;
-  addRow.append(input, addBtn);
+  addRow.append(input, startTime, endTime, addBtn);
   container.append(addRow);
 
   // 标签
@@ -118,6 +130,14 @@ export async function render(container) {
     text.textContent = it.text;
     row.append(text);
 
+    const t = formatPlanTime(it);
+    if (t) {
+      const timeBadge = document.createElement('span');
+      timeBadge.className = 'badge badge-blue';
+      timeBadge.textContent = `🕐 ${t}`;
+      row.append(timeBadge);
+    }
+
     if (it.important && !isDone) {
       const star = document.createElement('span');
       star.className = 'badge badge-orange';
@@ -165,11 +185,15 @@ export async function render(container) {
           fields: [
             { key: 'text', label: '内容', type: 'text', required: true },
             { key: 'date', label: '日期', type: 'date', required: true },
+            { key: 'timeStart', label: '开始时间（可选）', type: 'time' },
+            { key: 'timeEnd', label: '结束时间（可选）', type: 'time' },
             { key: 'important', label: '优先级', type: 'select', options: [{ value: '1', label: '⭐ 重要' }, { value: '0', label: '普通' }] },
             { key: 'note', label: '备注', type: 'text' }
           ],
-          values: { text: it.text, date: it._src, important: it.important ? '1' : '0', note: it.note || '' },
+          values: { text: it.text, date: it._src, timeStart: it.timeStart || '', timeEnd: it.timeEnd || '', important: it.important ? '1' : '0', note: it.note || '' },
           onSubmit: async v => {
+            const check = validateTimeRange(v.timeStart, v.timeEnd);
+            if (!check.ok) throw new Error(check.error);
             mutate(s => {
               const arr = s.plans[it._src] || [];
               const idx = arr.findIndex(x => x.id === it.id);
@@ -180,7 +204,9 @@ export async function render(container) {
                 text: v.text.trim(),
                 important: v.important === '1',
                 note: v.note.trim(),
-                origDate: v.date
+                origDate: v.date,
+                timeStart: v.timeStart,
+                timeEnd: v.timeEnd
               };
               if (!s.plans[v.date]) s.plans[v.date] = [];
               s.plans[v.date].push(newItem);

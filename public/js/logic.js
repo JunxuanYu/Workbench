@@ -134,6 +134,27 @@ export function planProgress(items) {
   return { total, done };
 }
 
+// 计划时间段：开始+结束时间（HH:mm，可只填一端），组装成展示文本；都没有返回 null
+export function formatPlanTime(it) {
+  const s = it && it.timeStart ? String(it.timeStart).trim() : '';
+  const e = it && it.timeEnd ? String(it.timeEnd).trim() : '';
+  if (!s && !e) return null;
+  if (s && e) return `${s}–${e}`;
+  return s || e;
+}
+
+// 校验时间段：格式必须 HH:mm（00-23/00-59），且结束不早于开始
+export function validateTimeRange(start, end) {
+  const s = String(start || '').trim();
+  const e = String(end || '').trim();
+  if (!s && !e) return { ok: true };
+  const okTime = t => /^\d{2}:\d{2}$/.test(t) && Number(t.slice(0, 2)) <= 23 && Number(t.slice(3, 5)) <= 59;
+  if (s && !okTime(s)) return { ok: false, error: '开始时间格式不正确' };
+  if (e && !okTime(e)) return { ok: false, error: '结束时间格式不正确' };
+  if (s && e && s > e) return { ok: false, error: '结束时间不能早于开始时间' };
+  return { ok: true };
+}
+
 // ---------- 开发工作 ----------
 export function projectCounts(project) {
   const c = { todo: 0, doing: 0, done: 0 };
