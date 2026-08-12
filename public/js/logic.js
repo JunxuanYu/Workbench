@@ -357,6 +357,55 @@ export function computeHomeSummary(state, today) {
   };
 }
 
+// ---------- 首页五卡概要预览 ----------
+// 今日待办预览：取前 N 条未完成的计划（含顺延）
+export function pendingPlanPreview(plans, today, limit = 3) {
+  return assembleToday(plans || {}, today)
+    .filter(i => !i.done)
+    .slice(0, limit)
+    .map(i => ({ text: i.text, important: !!i.important }));
+}
+
+// 开发工作预览：跨项目取前 N 条「进行中」任务
+export function doingTasksPreview(projects, limit = 3) {
+  const out = [];
+  for (const p of projects || []) {
+    for (const t of p.tasks || []) {
+      if (t.status === 'doing') {
+        out.push({ project: p.name, title: t.title });
+        if (out.length >= limit) return out;
+      }
+    }
+  }
+  return out;
+}
+
+// 咨询工作预览：指定日期范围内（本周）的记录，按日期倒序取前 N 条
+export function consultRecordsInRange(clients, start, end, limit = 3) {
+  const out = [];
+  for (const c of clients || []) {
+    for (const r of c.records || []) {
+      if (isInRange(r.date, start, end)) out.push({ client: c.name, date: r.date, content: r.content || '' });
+    }
+  }
+  return out.sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
+}
+
+// 饮食预览：当天有记录的餐次，按早餐→午餐→晚餐→加餐顺序
+const MEAL_ORDER = { breakfast: 0, lunch: 1, dinner: 2, snack: 3 };
+export function mealEntriesOn(meals, date) {
+  const day = meals?.[date] || {};
+  return Object.entries(day)
+    .filter(([, v]) => v && v.food)
+    .map(([key, v]) => ({ key, food: v.food }))
+    .sort((a, b) => (MEAL_ORDER[a.key] ?? 9) - (MEAL_ORDER[b.key] ?? 9));
+}
+
+// 账目预览：最近 N 条账目（按日期倒序）
+export function recentLedger(ledger, limit = 3) {
+  return [...(ledger || [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
+}
+
 // ---------- 分类管理 ----------
 export function normalizeCategoryName(n) { return String(n || '').trim(); }
 

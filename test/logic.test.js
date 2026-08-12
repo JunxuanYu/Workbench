@@ -13,6 +13,7 @@ import {
   monthBudget, setMonthBudget, budgetStatus,
   computeHomeSummary,
   formatMemoTime, parseMemoTime, memoIsDue, sortMemos,
+  pendingPlanPreview, doingTasksPreview, consultRecordsInRange, mealEntriesOn, recentLedger,
   addCategory, canDeleteCategory
 } from '../public/js/logic.js';
 
@@ -410,6 +411,73 @@ test('P8 备忘排序：置顶 → 提醒时间升序 → 无时间按创建倒�
   assert.deepEqual(ids, ['b', 'd', 'c', 'a', 'e']);
   assert.deepEqual(sortMemos([]), []);
   assert.deepEqual(sortMemos(undefined), []);
+});
+
+// ---------- P8：首页五卡概要 ----------
+test('P8 概要：今日待办预览取前 N 条未完成（含顺延）', () => {
+  const plans = {
+    '2026-08-10': [{ id: 'a', text: '旧任务', done: false, important: false, note: '' }],
+    '2026-08-11': [
+      { id: 'b', text: '任务B', done: false, important: true, note: '' },
+      { id: 'c', text: '任务C', done: true, important: false, note: '' },
+      { id: 'd', text: '任务D', done: false, important: false, note: '' }
+    ]
+  };
+  assert.deepEqual(pendingPlanPreview(plans, '2026-08-11', 2), [
+    { text: '任务B', important: true },
+    { text: '任务D', important: false }
+  ]);
+  assert.deepEqual(pendingPlanPreview({}, '2026-08-11', 3), []);
+});
+
+test('P8 概要：进行中任务预览跨项目取前 N 条', () => {
+  const projects = [
+    { name: 'A', tasks: [{ title: 'T1', status: 'doing' }, { title: 'T2', status: 'todo' }] },
+    { name: 'B', tasks: [{ title: 'T3', status: 'doing' }, { title: 'T4', status: 'doing' }] },
+    { name: 'C', tasks: [{ title: 'T5', status: 'doing' }] }
+  ];
+  assert.deepEqual(doingTasksPreview(projects, 3), [
+    { project: 'A', title: 'T1' },
+    { project: 'B', title: 'T3' },
+    { project: 'B', title: 'T4' }
+  ]);
+  assert.deepEqual(doingTasksPreview([], 3), []);
+});
+
+test('P8 概要：本周咨询记录预览带客户名与内容，倒序取前 N', () => {
+  const clients = [
+    { name: '张三', records: [{ date: '2026-08-10', content: '咨询A' }, { date: '2026-08-17', content: '下周' }] },
+    { name: '李四', records: [{ date: '2026-08-12' }] }
+  ];
+  assert.deepEqual(consultRecordsInRange(clients, '2026-08-10', '2026-08-16', 3), [
+    { client: '李四', date: '2026-08-12', content: '' },
+    { client: '张三', date: '2026-08-10', content: '咨询A' }
+  ]);
+  assert.deepEqual(consultRecordsInRange([], '2026-08-10', '2026-08-16', 3), []);
+});
+
+test('P8 概要：当日饮食条目按餐次顺序输出', () => {
+  const meals = { '2026-08-11': { dinner: { food: '米饭' }, breakfast: { food: '鸡蛋' }, snack: null, lunch: { food: '面' } } };
+  assert.deepEqual(mealEntriesOn(meals, '2026-08-11'), [
+    { key: 'breakfast', food: '鸡蛋' },
+    { key: 'lunch', food: '面' },
+    { key: 'dinner', food: '米饭' }
+  ]);
+  assert.deepEqual(mealEntriesOn({}, '2026-08-11'), []);
+  assert.deepEqual(mealEntriesOn(undefined, '2026-08-11'), []);
+});
+
+test('P8 概要：最近账目按日期倒序取前 N 条', () => {
+  const ledger = [
+    { date: '2026-08-10', category: '餐饮', type: 'expense', amount: 20 },
+    { date: '2026-08-12', category: '工资', type: 'income', amount: 500 },
+    { date: '2026-08-11', category: '交通', type: 'expense', amount: 5 }
+  ];
+  assert.deepEqual(recentLedger(ledger, 2), [
+    { date: '2026-08-12', category: '工资', type: 'income', amount: 500 },
+    { date: '2026-08-11', category: '交通', type: 'expense', amount: 5 }
+  ]);
+  assert.deepEqual(recentLedger([], 3), []);
 });
 
 // ---------- P9：分类管理 ----------

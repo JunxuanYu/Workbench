@@ -1,13 +1,18 @@
-// 首页总览：一打开就心里有数——5张摘要卡 + 快速备忘（可设提醒日期时间）
+// 首页总览：一打开就心里有数——5张摘要卡（含概要导航）+ 快速备忘（可设提醒日期时间）
 import { getState, mutate } from '../store.js';
 import { toast } from '../components/toast.js';
 import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { navigate } from '../router.js';
-import { computeHomeSummary, formatDate, todayStr, uid, formatMemoTime, memoIsDue, sortMemos } from '../logic.js';
+import {
+  computeHomeSummary, formatDate, todayStr, uid, formatMemoTime, memoIsDue, sortMemos,
+  weekStartOf, weekEndOf, pendingPlanPreview, doingTasksPreview, consultRecordsInRange,
+  mealEntriesOn, recentLedger
+} from '../logic.js';
 
 const fmt = n => (Number.isInteger(n) ? n.toLocaleString('zh-CN') : Number(n).toFixed(2));
+const MEAL_LABELS = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐', snack: '加餐' };
 
 export async function render(container) {
   container.innerHTML = '';
@@ -36,13 +41,30 @@ export async function render(container) {
   head.append(dateTxt, summary);
   container.append(head);
 
-  // ---------- 5 张摘要卡 ----------
+  // ---------- 5 张摘要卡（带概要内容导航） ----------
+  const weekStart = weekStartOf(today);
+  const weekEnd = weekEndOf(today);
   const cards = [
-    { route: 'today', icon: '📋', title: '今日计划', big: `完成 ${s.planDone}/${s.planTotal}`, sub: '▶ 去安排' },
-    { route: 'dev', icon: '💻', title: '开发工作', big: `${s.devDoing} 个`, sub: `进行中 · 今日日志 ${s.devLogsToday} 条` },
-    { route: 'consult', icon: '🤝', title: '咨询工作', big: `${s.consultWeek} 次`, sub: `本周咨询 · 待收 ¥${fmt(s.pendingFees)}` },
-    { route: 'diet', icon: '🍚', title: '饮食计划', big: `${s.mealsToday}/4 餐`, sub: '今天已记录' },
-    { route: 'money', icon: '💰', title: '账目计划', big: `¥${fmt(s.expenseToday)}`, sub: `今日支出 · 本月结余 ¥${fmt(s.monthBalance)}` }
+    {
+      route: 'today', icon: '📋', title: '今日计划', big: `完成 ${s.planDone}/${s.planTotal}`, sub: '▶ 去安排',
+      items: pendingPlanPreview(state.plans, today, 3).map(i => `${i.important ? '⭐ ' : ''}${i.text}`)
+    },
+    {
+      route: 'dev', icon: '💻', title: '开发工作', big: `${s.devDoing} 个`, sub: `进行中 · 今日日志 ${s.devLogsToday} 条`,
+      items: doingTasksPreview(state.projects, 3).map(i => `${i.project}：${i.title}`)
+    },
+    {
+      route: 'consult', icon: '🤝', title: '咨询工作', big: `${s.consultWeek} 次`, sub: `本周咨询 · 待收 ¥${fmt(s.pendingFees)}`,
+      items: consultRecordsInRange(state.clients, weekStart, weekEnd, 3).map(i => `${i.date.slice(5)} ${i.client}${i.content ? ` · ${i.content}` : ''}`)
+    },
+    {
+      route: 'diet', icon: '🍚', title: '饮食计划', big: `${s.mealsToday}/4 餐`, sub: '今天已记录',
+      items: mealEntriesOn(state.meals, today).map(i => `${MEAL_LABELS[i.key] || i.key}：${i.food}`)
+    },
+    {
+      route: 'money', icon: '💰', title: '账目计划', big: `¥${fmt(s.expenseToday)}`, sub: `今日支出 · 本月结余 ¥${fmt(s.monthBalance)}`,
+      items: recentLedger(state.ledger, 3).map(i => `${i.date.slice(5)} ${i.category} ${i.type === 'expense' ? '-' : '+'}¥${fmt(i.amount)}`)
+    }
   ];
   const grid = document.createElement('div');
   grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;';
@@ -63,6 +85,27 @@ export async function render(container) {
     subEl.style.cssText = 'font-size:12px;color:var(--text-soft);';
     subEl.textContent = c.sub;
     card.append(headRow, big, subEl);
+    // 概要内容导航
+    if (c.items.length) {
+      const list = document.createElement('div');
+      list.style.cssText = 'margin-top:10px;border-top:1px dashed var(--border);padding-top:8px;display:flex;flex-direction:column;gap:4px;';
+      for (const it of c.items) {
+        const line = document.createElement('div');
+        line.style.cssText = 'font-size:12px;color:var(--text-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;transition:color .12s;';
+        line.textContent = it;
+        line.title = it;
+        line.onmouseenter = () => { line.style.color = 'var(--accent)'; };
+        line.onmouseleave = () => { line.style.color = ''; };
+        line.onclick = e => { e.stopPropagation(); navigate(c.route); };
+        list.append(line);
+      }
+      card.append(list);
+    } else {
+      const emptyHint = document.createElement('div');
+      emptyHint.style.cssText = 'margin-top:10px;font-size:12px;color:var(--text-soft);opacity:.7;';
+      emptyHint.textContent = '暂无概要内容';
+      card.append(emptyHint);
+    }
     grid.append(card);
   }
   container.append(grid);
