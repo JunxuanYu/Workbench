@@ -1,0 +1,4 @@
+[     269ms] TypeError: routes[key].render is not a function
+    at render (http://127.0.0.1:8787/js/router.js:34:21)
+    at initRouter (http://127.0.0.1:8787/js/router.js:15:3)
+    at boot (http://127.0.0.1:8787/js/app.js:12:3)

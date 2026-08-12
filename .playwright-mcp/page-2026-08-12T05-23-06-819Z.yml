@@ -1,0 +1,85 @@
+- generic [active] [ref=f34e1]:
+  - complementary [ref=f34e2]:
+    - generic [ref=f34e3]: 💪 WorkLift
+    - navigation [ref=f34e4]:
+      - link "🏠 首页总览" [ref=f34e5] [cursor=pointer]:
+        - /url: "#/home"
+        - generic [ref=f34e6]: 🏠
+        - text: 首页总览
+      - link "📋 今日计划" [ref=f34e7] [cursor=pointer]:
+        - /url: "#/today"
+        - generic [ref=f34e8]: 📋
+        - text: 今日计划
+      - link "💻 开发工作" [ref=f34e9] [cursor=pointer]:
+        - /url: "#/dev"
+        - generic [ref=f34e10]: 💻
+        - text: 开发工作
+      - link "🤝 咨询工作" [ref=f34e11] [cursor=pointer]:
+        - /url: "#/consult"
+        - generic [ref=f34e12]: 🤝
+        - text: 咨询工作
+      - link "🍚 饮食计划" [ref=f34e13] [cursor=pointer]:
+        - /url: "#/diet"
+        - generic [ref=f34e14]: 🍚
+        - text: 饮食计划
+      - link "💰 账目计划" [ref=f34e15] [cursor=pointer]:
+        - /url: "#/money"
+        - generic [ref=f34e16]: 💰
+        - text: 账目计划
+      - link "⚙️ 数据与设置" [ref=f34e17] [cursor=pointer]:
+        - /url: "#/settings"
+        - generic [ref=f34e18]: ⚙️
+        - text: 数据与设置
+  - main [ref=f34e19]:
+    - generic [ref=f34e20]:
+      - heading "数据与设置" [level=1] [ref=f34e21]
+      - paragraph [ref=f34e22]: 备份、恢复、清空数据，管理账目分类。
+      - generic [ref=f34e23]:
+        - generic [ref=f34e24]: 数据文件
+        - generic [ref=f34e25]:
+          - generic [ref=f34e26]: 文件位置：D:\Blogs\WorkLiftApp\data\worklift-data.json
+          - generic [ref=f34e27]: 大小：3.1 KB
+          - generic [ref=f34e28]: 上次保存：2026/8/12 13:22:37
+      - generic [ref=f34e29]:
+        - generic [ref=f34e30]: 备份与恢复
+        - generic [ref=f34e31]:
+          - button "💾 一键备份" [ref=f34e32] [cursor=pointer]
+          - button "↩ 从备份恢复" [ref=f34e33] [cursor=pointer]
+          - button "🧹 清空全部数据" [ref=f34e34] [cursor=pointer]
+      - generic [ref=f34e35]:
+        - generic [ref=f34e36]:
+          - generic [ref=f34e37]: 账目分类
+          - button "＋ 添加分类" [ref=f34e38] [cursor=pointer]
+        - generic [ref=f34e40]:
+          - generic [ref=f34e41]: 餐饮
+          - generic [ref=f34e42]: 支出
+          - generic [ref=f34e43]: 默认
+        - generic [ref=f34e45]:
+          - generic [ref=f34e46]: 交通
+          - generic [ref=f34e47]: 支出
+          - generic [ref=f34e48]: 默认
+        - generic [ref=f34e50]:
+          - generic [ref=f34e51]: 购物
+          - generic [ref=f34e52]: 支出
+          - generic [ref=f34e53]: 默认
+        - generic [ref=f34e55]:
+          - generic [ref=f34e56]: 住房
+          - generic [ref=f34e57]: 支出
+          - generic [ref=f34e58]: 默认
+        - generic [ref=f34e60]:
+          - generic [ref=f34e61]: 医疗
+          - generic [ref=f34e62]: 支出
+          - generic [ref=f34e63]: 默认
+        - generic [ref=f34e65]:
+          - generic [ref=f34e66]: 其他
+          - generic [ref=f34e67]: 支出
+          - generic [ref=f34e68]: 默认
+        - generic [ref=f34e70]:
+          - generic [ref=f34e71]: 工资收入
+          - generic [ref=f34e72]: 收入
+          - generic [ref=f34e73]: 默认
+        - generic [ref=f34e74]:
+          - generic [ref=f34e75]:
+            - generic [ref=f34e76]: 培训费
+            - generic [ref=f34e77]: 支出
+          - button "🗑️" [ref=f34e78] [cursor=pointer]

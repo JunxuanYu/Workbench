@@ -1,0 +1,33 @@
+- generic [active] [ref=e1]:
+  - complementary [ref=e2]:
+    - generic [ref=e3]: 💪 WorkLift
+    - navigation [ref=e4]:
+      - link "🏠 首页总览" [ref=e5] [cursor=pointer]:
+        - /url: "#/home"
+        - generic [ref=e6]: 🏠
+        - text: 首页总览
+      - link "📋 今日计划" [ref=e7] [cursor=pointer]:
+        - /url: "#/today"
+        - generic [ref=e8]: 📋
+        - text: 今日计划
+      - link "💻 开发工作" [ref=e9] [cursor=pointer]:
+        - /url: "#/dev"
+        - generic [ref=e10]: 💻
+        - text: 开发工作
+      - link "🤝 咨询工作" [ref=e11] [cursor=pointer]:
+        - /url: "#/consult"
+        - generic [ref=e12]: 🤝
+        - text: 咨询工作
+      - link "🍚 饮食计划" [ref=e13] [cursor=pointer]:
+        - /url: "#/diet"
+        - generic [ref=e14]: 🍚
+        - text: 饮食计划
+      - link "💰 账目计划" [ref=e15] [cursor=pointer]:
+        - /url: "#/money"
+        - generic [ref=e16]: 💰
+        - text: 账目计划
+      - link "⚙️ 数据与设置" [ref=e17] [cursor=pointer]:
+        - /url: "#/settings"
+        - generic [ref=e18]: ⚙️
+        - text: 数据与设置
+  - main [ref=e19]

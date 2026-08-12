@@ -1,0 +1,14 @@
+{
+  "name": "worklift-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "WorkLift 本地个人工作生活APP",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

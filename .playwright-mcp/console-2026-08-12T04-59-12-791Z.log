@@ -1,0 +1,8 @@
+[     337ms] The requested module './pages/consult.js' does not provide an export named 'consult'
+[     349ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8787/favicon.ico:0
+[    7509ms] The requested module './pages/consult.js' does not provide an export named 'consult'
+[    8172ms] The requested module './pages/consult.js' does not provide an export named 'consult'
+[    8363ms] The requested module './pages/consult.js' does not provide an export named 'consult'
+[    8562ms] The requested module './pages/consult.js' does not provide an export named 'consult'
+[    8769ms] The requested module './pages/consult.js' does not provide an export named 'consult'
+[    8956ms] The requested module './pages/consult.js' does not provide an export named 'consult'

@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-12T05:21:45.929Z",
+  "memos": [
+    {
+      "id": "m_mspmojhq_jpm4l7",
+      "text": "记得周五交房租",
+      "pinned": true,
+      "createdAt": "2026-08-12T05:07:46.478Z"
+    }
+  ],
+  "plans": {
+    "2026-08-12": [
+      {
+        "id": "p_mspmhepg_axvl3c",
+        "text": "验收测试：今日事项",
+        "done": true,
+        "important": true,
+        "note": "",
+        "origDate": "2026-08-12"
+      },
+      {
+        "id": "p_mspmw7lp_kw1l7i",
+        "text": "今天必须完成：写周报",
+        "done": false,
+        "important": false,
+        "note": "",
+        "origDate": "2026-08-12"
+      }
+    ]
+  },
+  "projects": [
+    {
+      "id": "pr_mspmj59u_2h8j5h",
+      "name": "验收项目",
+      "desc": "",
+      "tasks": [
+        {
+          "id": "t_mspmlpci_n1ht42",
+          "title": "验收任务A",
+          "status": "doing",
+          "priority": "normal",
+          "note": ""
+        }
+      ],
+      "logs": [
+        {
+          "id": "l_mspmlvl0_byqcsu",
+          "date": "2026-08-12",
+          "content": "写了验收测试",
+          "hours": ""
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "id": "c_mspmm52n_067ry5",
+      "name": "验收客户",
+      "phone": "",
+      "status": "potential",
+      "note": "",
+      "records": [
+        {
+          "id": "r_mspmmhgy_v7xsnj",
+          "date": "2026-08-12",
+          "content": "聊了项目方案"
+        }
+      ],
+      "todos": [
+        {
+          "id": "ct_mspmmj7o_akvamy",
+          "text": "周四回访",
+          "done": false
+        }
+      ],
+      "fees": [
+        {
+          "id": "f_mspmmp9l_xra43y",
+          "amount": 1200,
+          "date": "2026-08-12",
+          "received": true
+        }
+      ]
+    }
+  ],
+  "meals": {
+    "2026-08-12": {
+      "breakfast": {
+        "food": "两个鸡蛋+牛奶",
+        "note": ""
+      }
+    }
+  },
+  "ledger": [
+    {
+      "id": "e_mspmn98x_usk6jo",
+      "type": "expense",
+      "amount": 35,
+      "category": "餐饮",
+      "date": "2026-08-12",
+      "note": ""
+    },
+    {
+      "id": "e_mspmno6e_115abq",
+      "type": "income",
+      "amount": 8000,
+      "category": "工资收入",
+      "date": "2026-08-12",
+      "note": ""
+    },
+    {
+      "id": "e_mspn6j1r_dgukob",
+      "type": "expense",
+      "amount": 500,
+      "category": "培训费",
+      "date": "2026-08-12",
+      "note": ""
+    }
+  ],
+  "categories": [
+    {
+      "name": "餐饮",
+      "kind": "expense",
+      "builtin": true
+    },
+    {
+      "name": "交通",
+      "kind": "expense",
+      "builtin": true
+    },
+    {
+      "name": "购物",
+      "kind": "expense",
+      "builtin": true
+    },
+    {
+      "name": "住房",
+      "kind": "expense",
+      "builtin": true
+    },
+    {
+      "name": "医疗",
+      "kind": "expense",
+      "builtin": true
+    },
+    {
+      "name": "其他",
+      "kind": "expense",
+      "builtin": true
+    },
+    {
+      "name": "工资收入",
+      "kind": "income",
+      "builtin": true
+    },
+    {
+      "name": "培训费",
+      "kind": "expense",
+      "builtin": false
+    }
+  ]
+}

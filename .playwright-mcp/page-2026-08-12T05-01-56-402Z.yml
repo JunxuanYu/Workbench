@@ -1,0 +1,49 @@
+- generic [active] [ref=f8e1]:
+  - complementary [ref=f8e2]:
+    - generic [ref=f8e3]: 💪 WorkLift
+    - navigation [ref=f8e4]:
+      - link "🏠 首页总览" [ref=f8e5] [cursor=pointer]:
+        - /url: "#/home"
+        - generic [ref=f8e6]: 🏠
+        - text: 首页总览
+      - link "📋 今日计划" [ref=f8e7] [cursor=pointer]:
+        - /url: "#/today"
+        - generic [ref=f8e8]: 📋
+        - text: 今日计划
+      - link "💻 开发工作" [ref=f8e9] [cursor=pointer]:
+        - /url: "#/dev"
+        - generic [ref=f8e10]: 💻
+        - text: 开发工作
+      - link "🤝 咨询工作" [ref=f8e11] [cursor=pointer]:
+        - /url: "#/consult"
+        - generic [ref=f8e12]: 🤝
+        - text: 咨询工作
+      - link "🍚 饮食计划" [ref=f8e13] [cursor=pointer]:
+        - /url: "#/diet"
+        - generic [ref=f8e14]: 🍚
+        - text: 饮食计划
+      - link "💰 账目计划" [ref=f8e15] [cursor=pointer]:
+        - /url: "#/money"
+        - generic [ref=f8e16]: 💰
+        - text: 账目计划
+      - link "⚙️ 数据与设置" [ref=f8e17] [cursor=pointer]:
+        - /url: "#/settings"
+        - generic [ref=f8e18]: ⚙️
+        - text: 数据与设置
+  - main [ref=f8e19]:
+    - generic [ref=f8e20]:
+      - heading "今日计划" [level=1] [ref=f8e53]
+      - paragraph [ref=f8e54]: 安排每天要做的事；没做完的会自动顺延到新的一天，不会消失。
+      - generic [ref=f8e55]:
+        - button "◀" [ref=f8e56] [cursor=pointer]
+        - button "8月12日 周三" [ref=f8e57] [cursor=pointer]
+        - button "▶" [ref=f8e58] [cursor=pointer]
+      - generic [ref=f8e59]:
+        - textbox "加一件事，回车即添加..." [ref=f8e60]
+        - button "+ 添加" [ref=f8e61] [cursor=pointer]
+      - generic [ref=f8e62]:
+        - button "全部" [ref=f8e63] [cursor=pointer]
+        - button "今天" [ref=f8e64] [cursor=pointer]
+        - button "明天" [ref=f8e65] [cursor=pointer]
+        - button "逾期" [ref=f8e66] [cursor=pointer]
+      - generic [ref=f8e67]: 今天还没有安排，写第一件事吧
