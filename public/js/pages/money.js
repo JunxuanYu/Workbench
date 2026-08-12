@@ -1,17 +1,22 @@
-// 账目计划：按月记账，三卡统计 + 类别条形排行 + 明细筛选
+// 账目计划：按月记账，预算设置 + 环形图/条形排行 + 明细筛选
 import { getState, mutate } from '../store.js';
 import { toast } from '../components/toast.js';
 import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { dateNav } from '../components/dateNav.js';
-import { ledgerMonthStats, categoryRanking, todayStr, monthKey, currentMonthKey, uid } from '../logic.js';
+import {
+  ledgerMonthStats, categoryRanking, categoryPercentages,
+  monthBudget, setMonthBudget, budgetStatus,
+  todayStr, monthKey, currentMonthKey, uid
+} from '../logic.js';
 
 let viewMonth = currentMonthKey(); // YYYY-MM
 let filter = 'all'; // all | expense | income
 let filterCat = ''; // 分类名，'' 表示不限
 
 const fmt = n => (Number.isInteger(n) ? n.toLocaleString('zh-CN') : Number(n).toFixed(2));
+const DONUT_COLORS = ['#4a6cf7', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
 
 export async function render(container) {
   container.innerHTML = '';
@@ -32,13 +37,15 @@ export async function render(container) {
   const ledger = state.ledger || [];
   const cats = state.categories || [];
   const stats = ledgerMonthStats(ledger, viewMonth);
+  const budget = monthBudget(state.budgets, viewMonth);
 
-  // ---------- 顶部三卡 ----------
+  // ---------- 顶部四卡 ----------
   const cards = document.createElement('div');
   cards.style.cssText = 'display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;';
-  for (const [label, value, cls] of [
+  for (const [label, value, cls, extra] of [
     ['本月收入', stats.income, 'var(--green)'],
     ['本月支出', stats.expense, 'var(--orange)'],
+    ['本月预算', budget, 'var(--accent)', true],
     ['本月结余', stats.balance, 'var(--text)']
   ]) {
     const card = document.createElement('div');
@@ -46,16 +53,24 @@ export async function render(container) {
     card.style.cssText = 'flex:1;min-width:140px;text-align:center;';
     const num = document.createElement('div');
     num.style.cssText = `font-size:24px;font-weight:700;color:${cls};`;
-    num.textContent = `¥${fmt(value)}`;
+    num.textContent = extra ? (budget ? `¥${fmt(budget)}` : '未设置') : `¥${fmt(value)}`;
     const lab = document.createElement('div');
     lab.style.cssText = 'font-size:13px;color:var(--text-soft);margin-top:4px;';
     lab.textContent = label;
     card.append(num, lab);
+    if (extra) {
+      const setBtn = document.createElement('button');
+      setBtn.className = 'btn btn-sm';
+      setBtn.style.cssText = 'margin-top:8px;';
+      setBtn.textContent = '⚙ 设置';
+      setBtn.onclick = () => budgetModal(container);
+      card.append(setBtn);
+    }
     cards.append(card);
   }
   container.append(cards);
 
-  // ---------- 操作行：记一笔 + 分类条形 ----------
+  // ---------- 操作行：记一笔 + 预算进度 + 可视化 ----------
   const rowWrap = document.createElement('div');
   rowWrap.style.cssText = 'display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;';
 
@@ -75,7 +90,7 @@ export async function render(container) {
   addHead.append(addTitle, addBtn);
   addCard.append(addHead);
 
-  // 类别条形
+  // 类别条形（支出排行）
   const ranking = categoryRanking(ledger, viewMonth);
   if (!ranking.length) {
     addCard.append(emptyEl('本月还没有支出'));
@@ -100,6 +115,84 @@ export async function render(container) {
     }
   }
   rowWrap.append(addCard);
+
+  // 预算进度
+  const budgetCard = document.createElement('div');
+  budgetCard.className = 'card';
+  budgetCard.style.cssText = 'flex:1;min-width:220px;';
+  const budgetHead = document.createElement('div');
+  budgetHead.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
+  const budgetTitle = document.createElement('div');
+  budgetTitle.style.cssText = 'font-size:14px;font-weight:600;';
+  budgetTitle.textContent = '🎯 预算进度';
+  const budgetBtn = document.createElement('button');
+  budgetBtn.className = 'btn btn-sm';
+  budgetBtn.textContent = budget ? '修改预算' : '设置预算';
+  budgetBtn.onclick = () => budgetModal(container);
+  budgetHead.append(budgetTitle, budgetBtn);
+  budgetCard.append(budgetHead);
+
+  const bs = budgetStatus(stats.expense, budget);
+  if (!bs.hasBudget) {
+    budgetCard.append(emptyEl('本月未设置预算，点「设置预算」开始'));
+  } else {
+    const barWrap = document.createElement('div');
+    barWrap.style.cssText = 'height:16px;background:var(--gray-light);border-radius:8px;overflow:hidden;margin-bottom:8px;';
+    const bar = document.createElement('div');
+    bar.style.cssText = `height:100%;width:${bs.pct}%;background:${bs.over ? 'var(--red)' : 'var(--accent)'};border-radius:8px;transition:width .3s;`;
+    barWrap.append(bar);
+    budgetCard.append(barWrap);
+    const used = document.createElement('div');
+    used.style.cssText = 'font-size:13px;';
+    used.textContent = `已用 ¥${fmt(stats.expense)} / ¥${fmt(budget)}（${bs.pct}%）`;
+    budgetCard.append(used);
+    const remain = document.createElement('div');
+    remain.style.cssText = `font-size:13px;color:${bs.over ? 'var(--red)' : 'var(--green)'};`;
+    remain.textContent = bs.over ? `⚠ 已超支 ¥${fmt(-bs.remaining)}` : `剩余 ¥${fmt(bs.remaining)}`;
+    budgetCard.append(remain);
+  }
+  rowWrap.append(budgetCard);
+
+  // 支出分布环形图
+  const segs = categoryPercentages(ranking);
+  if (segs.length) {
+    const donutCard = document.createElement('div');
+    donutCard.className = 'card';
+    donutCard.style.cssText = 'flex:1;min-width:240px;';
+    const donutHead = document.createElement('div');
+    donutHead.style.cssText = 'font-size:14px;font-weight:600;margin-bottom:10px;';
+    donutHead.textContent = '📊 支出分布';
+    donutCard.append(donutHead);
+    const body = document.createElement('div');
+    body.style.cssText = 'display:flex;align-items:center;gap:16px;';
+    const pie = document.createElement('div');
+    pie.style.cssText = `position:relative;width:110px;height:110px;border-radius:50%;flex-shrink:0;background:conic-gradient(${donutStops(segs)});`;
+    const hole = document.createElement('div');
+    hole.style.cssText = 'position:absolute;inset:22px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-soft);text-align:center;line-height:1.3;';
+    hole.textContent = `本月支出\n¥${fmt(stats.expense)}`;
+    pie.append(hole);
+    body.append(pie);
+    const legend = document.createElement('div');
+    legend.style.cssText = 'flex:1;min-width:0;font-size:12px;';
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const line = document.createElement('div');
+      line.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:5px;';
+      const dot = document.createElement('span');
+      dot.style.cssText = `width:10px;height:10px;border-radius:3px;flex-shrink:0;background:${DONUT_COLORS[i % DONUT_COLORS.length]};`;
+      const name = document.createElement('span');
+      name.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-soft);';
+      name.textContent = s.name;
+      const val = document.createElement('span');
+      val.style.cssText = 'font-weight:600;';
+      val.textContent = `${s.pct}%`;
+      line.append(dot, name, val);
+      legend.append(line);
+    }
+    body.append(legend);
+    donutCard.append(body);
+    rowWrap.append(donutCard);
+  }
   container.append(rowWrap);
 
   // ---------- 筛选 + 明细 ----------
@@ -144,6 +237,33 @@ export async function render(container) {
   container.append(listEl);
 
   // ---------- 内部函数 ----------
+  // 环形图渐变断点：按占比累加生成 conic-gradient 各段
+  function donutStops(segs) {
+    let acc = 0;
+    return segs.map((s, i) => {
+      const from = acc;
+      acc += s.pct;
+      return `${DONUT_COLORS[i % DONUT_COLORS.length]} ${from}% ${acc}%`;
+    }).join(',');
+  }
+
+  function budgetModal(ctx) {
+    openForm({
+      title: '设置本月预算',
+      fields: [
+        { key: 'amount', label: '预算金额（元）', type: 'number', required: true, placeholder: '输入 0 取消本月预算' }
+      ],
+      values: { amount: budget || '' },
+      onSubmit: async v => {
+        const r = setMonthBudget(state.budgets || {}, viewMonth, v.amount);
+        if (!r.ok) throw new Error(r.error);
+        mutate(s => { s.budgets = r.budgets; });
+        toast(v.amount === 0 ? '已取消预算' : '预算已保存');
+        render(ctx);
+      }
+    });
+  }
+
   function entryModal(entry, ctx) {
     const isExpense = (entry ? entry.type : 'expense') === 'expense';
     const opts = cats.map(c => ({ value: c.name, label: `${c.name} (${c.kind === 'income' ? '收入' : '支出'})` }));

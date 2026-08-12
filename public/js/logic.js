@@ -68,6 +68,7 @@ export function defaultData() {
     clients: [],
     meals: {},
     ledger: [],
+    budgets: {},
     categories: [
       { name: '餐饮', kind: 'expense', builtin: true },
       { name: '交通', kind: 'expense', builtin: true },
@@ -93,6 +94,10 @@ export function validateData(o) {
   }
   for (const k of ['plans', 'meals']) {
     if (!o[k] || typeof o[k] !== 'object' || Array.isArray(o[k])) errors.push(`缺少对象字段 ${k}`);
+  }
+  // budgets 为可选字段（兼容旧数据），但一旦存在必须是对象
+  if ('budgets' in o && (o.budgets === null || typeof o.budgets !== 'object' || Array.isArray(o.budgets))) {
+    errors.push('budgets 必须是对象');
   }
   return { ok: errors.length === 0, errors };
 }
@@ -262,6 +267,36 @@ export function categoryRanking(ledger, mk) {
     m.set(e.category, (m.get(e.category) || 0) + (Number(e.amount) || 0));
   }
   return [...m.entries()].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total);
+}
+
+// 月度预算：budgets = { 'YYYY-MM': 金额 }，未设置为 0
+export function monthBudget(budgets, mk) {
+  return Number((budgets || {})[mk]) || 0;
+}
+
+// 设置月度预算：金额 0 表示取消该月预算
+export function setMonthBudget(budgets, mk, amount) {
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt < 0) return { ok: false, error: '预算必须是大于等于0的数字' };
+  const next = { ...budgets };
+  if (amt === 0) delete next[mk];
+  else next[mk] = Math.round(amt * 100) / 100;
+  return { ok: true, budgets: next };
+}
+
+// 预算使用情况：pct 为已用百分比（超支封顶100），over 表示超支
+export function budgetStatus(expense, budget) {
+  const b = Number(budget) || 0;
+  const e = Number(expense) || 0;
+  if (b <= 0) return { hasBudget: false, pct: 0, remaining: 0, over: false };
+  return { hasBudget: true, pct: Math.min(100, Math.round(e / b * 10000) / 100), remaining: b - e, over: b - e < 0 };
+}
+
+// 支出类别占比（用于环形图）：返回 [{ name, total, pct }]，pct 为该类占总支出的百分比
+export function categoryPercentages(ranking) {
+  const total = ranking.reduce((n, r) => n + r.total, 0);
+  if (!total) return [];
+  return ranking.map(r => ({ name: r.name, total: r.total, pct: Math.round(r.total / total * 10000) / 100 }));
 }
 
 // ---------- 首页汇总 ----------

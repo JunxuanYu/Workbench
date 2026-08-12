@@ -9,7 +9,8 @@ import {
   projectCounts, allDevDoing, logsOnDate, moveTask,
   clientFeeSummary, consultWeekCount, allPendingFees,
   dietProgress, daysSinceLastMeal,
-  ledgerMonthStats, expenseToday, categoryRanking,
+  ledgerMonthStats, expenseToday, categoryRanking, categoryPercentages,
+  monthBudget, setMonthBudget, budgetStatus,
   computeHomeSummary,
   addCategory, canDeleteCategory
 } from '../public/js/logic.js';
@@ -57,6 +58,16 @@ test('校验：非对象/缺version/缺字段 均拒绝', () => {
   const d = defaultData();
   delete d.projects;
   assert.equal(validateData(d).ok, false);
+});
+
+test('校验：budgets 为可选字段（兼容旧数据），存在时必须是对象', () => {
+  const d = defaultData();
+  delete d.budgets;
+  assert.equal(validateData(d).ok, true, '旧数据没有 budgets 也应通过');
+  d.budgets = [];
+  assert.equal(validateData(d).ok, false, '数组不是合法 budgets');
+  d.budgets = { '2026-08': 3000 };
+  assert.equal(validateData(d).ok, true);
 });
 
 test('todayStr 返回本地日期（非UTC）', () => {
@@ -293,6 +304,38 @@ test('P7 类别排行：本月支出按类求和、降序排列', () => {
     { name: '交通', total: 20 }
   ]);
   assert.deepEqual(categoryRanking(ledger, '2026-07'), [{ name: '餐饮', total: 999 }]);
+});
+
+test('P7 预算：monthBudget 按月读取，未设置/空对象为 0', () => {
+  assert.equal(monthBudget({ '2026-08': 3000 }, '2026-08'), 3000);
+  assert.equal(monthBudget({ '2026-08': 3000 }, '2026-07'), 0);
+  assert.equal(monthBudget({}, '2026-08'), 0);
+  assert.equal(monthBudget(undefined, '2026-08'), 0);
+});
+
+test('P7 预算：setMonthBudget 设置/清零/非法值拒绝', () => {
+  assert.deepEqual(setMonthBudget({}, '2026-08', 3000), { ok: true, budgets: { '2026-08': 3000 } });
+  assert.deepEqual(setMonthBudget({ '2026-08': 3000 }, '2026-08', 0), { ok: true, budgets: {} });
+  assert.deepEqual(setMonthBudget({}, '2026-08', 12.345), { ok: true, budgets: { '2026-08': 12.35 } });
+  assert.deepEqual(setMonthBudget({}, '2026-08', -5), { ok: false, error: '预算必须是大于等于0的数字' });
+  assert.deepEqual(setMonthBudget({}, '2026-08', 'abc'), { ok: false, error: '预算必须是大于等于0的数字' });
+});
+
+test('P7 预算：budgetStatus 计算使用率/剩余/超支', () => {
+  assert.deepEqual(budgetStatus(500, 1000), { hasBudget: true, pct: 50, remaining: 500, over: false });
+  assert.deepEqual(budgetStatus(1200, 1000), { hasBudget: true, pct: 100, remaining: -200, over: true });
+  assert.deepEqual(budgetStatus(0, 0), { hasBudget: false, pct: 0, remaining: 0, over: false });
+  assert.deepEqual(budgetStatus(300, 1000), { hasBudget: true, pct: 30, remaining: 700, over: false });
+  assert.equal(budgetStatus(1000, 1000).pct, 100, '恰好用完为100%');
+});
+
+test('P7 预算：categoryPercentages 支出占比总和为100', () => {
+  const ranking = [{ name: '餐饮', total: 80 }, { name: '交通', total: 20 }];
+  assert.deepEqual(categoryPercentages(ranking), [
+    { name: '餐饮', total: 80, pct: 80 },
+    { name: '交通', total: 20, pct: 20 }
+  ]);
+  assert.deepEqual(categoryPercentages([]), []);
 });
 
 // ---------- P8：首页汇总 ----------
