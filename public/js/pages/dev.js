@@ -4,7 +4,7 @@ import { toast } from '../components/toast.js';
 import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
-import { projectCounts, todayStr, uid, moveTask } from '../logic.js';
+import { projectCounts, todayStr, uid, moveTask, normalizeRepoUrl } from '../logic.js';
 
 let selectedId = null;
 const STATUSES = [
@@ -52,12 +52,15 @@ export async function render(container) {
       title: '新建项目',
       fields: [
         { key: 'name', label: '项目名称', type: 'text', required: true, placeholder: '例如：WorkLift' },
+        { key: 'repoUrl', label: '远程仓库链接（可选）', type: 'text', placeholder: '例如：https://github.com/user/repo' },
         { key: 'desc', label: '一句话说明（可选）', type: 'text' }
       ],
       onSubmit: async v => {
         if (projects.some(p => p.name === v.name.trim())) throw new Error('项目名已存在');
+        const repoUrl = normalizeRepoUrl(v.repoUrl);
+        if (repoUrl === null) throw new Error('远程仓库链接格式不正确');
         mutate(s => {
-          s.projects.push({ id: uid('pr'), name: v.name.trim(), desc: v.desc.trim(), tasks: [], logs: [] });
+          s.projects.push({ id: uid('pr'), name: v.name.trim(), desc: v.desc.trim(), repoUrl, tasks: [], logs: [] });
           selectedId = s.projects[s.projects.length - 1].id;
         });
         toast('已创建');
@@ -112,6 +115,15 @@ export async function render(container) {
     hDesc.textContent = project.desc || '';
     const headActions = document.createElement('div');
     headActions.style.cssText = 'margin-left:auto;display:flex;gap:6px;';
+    if (project.repoUrl) {
+      const repoLink = document.createElement('a');
+      repoLink.className = 'btn btn-sm';
+      repoLink.href = project.repoUrl;
+      repoLink.target = '_blank';
+      repoLink.rel = 'noopener noreferrer';
+      repoLink.textContent = '🔗 远程仓库';
+      headActions.append(repoLink);
+    }
     const editBtn = document.createElement('button');
     editBtn.className = 'btn btn-sm';
     editBtn.textContent = '编辑项目';
@@ -120,15 +132,19 @@ export async function render(container) {
         title: '编辑项目',
         fields: [
           { key: 'name', label: '项目名称', type: 'text', required: true },
+          { key: 'repoUrl', label: '远程仓库链接（可选）', type: 'text', placeholder: '例如：https://github.com/user/repo' },
           { key: 'desc', label: '一句话说明', type: 'text' }
         ],
-        values: { name: project.name, desc: project.desc },
+        values: { name: project.name, desc: project.desc, repoUrl: project.repoUrl || '' },
         onSubmit: async v => {
           if (projects.some(p => p.id !== project.id && p.name === v.name.trim())) throw new Error('项目名已存在');
+          const repoUrl = normalizeRepoUrl(v.repoUrl);
+          if (repoUrl === null) throw new Error('远程仓库链接格式不正确');
           mutate(s => {
             const p = s.projects.find(x => x.id === project.id);
             p.name = v.name.trim();
             p.desc = v.desc.trim();
+            p.repoUrl = repoUrl;
           });
           toast('已保存');
           render(container);

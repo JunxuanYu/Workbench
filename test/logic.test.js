@@ -14,7 +14,8 @@ import {
   computeHomeSummary,
   formatMemoTime, parseMemoTime, memoIsDue, sortMemos,
   pendingPlanPreview, doingTasksPreview, consultRecordsInRange, mealEntriesOn, recentLedger,
-  addCategory, canDeleteCategory
+  addCategory, canDeleteCategory,
+  normalizeRepoUrl
 } from '../public/js/logic.js';
 
 // ---------- 日期工具 ----------
@@ -75,6 +76,18 @@ test('校验：budgets 为可选字段（兼容旧数据），存在时必须是
 test('todayStr 返回本地日期（非UTC）', () => {
   const d = todayStr();
   assert.match(d, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+// ---------- 远程仓库链接 ----------
+test('远程仓库：normalizeRepoUrl 归一化/拒绝', () => {
+  assert.equal(normalizeRepoUrl(''), '');
+  assert.equal(normalizeRepoUrl('   '), '');
+  assert.equal(normalizeRepoUrl(undefined), '');
+  assert.equal(normalizeRepoUrl('github.com/user/repo'), 'https://github.com/user/repo');
+  assert.equal(normalizeRepoUrl('https://github.com/user/repo'), 'https://github.com/user/repo');
+  assert.equal(normalizeRepoUrl('http://example.com/a/'), 'http://example.com/a');
+  assert.equal(normalizeRepoUrl('not a url'), null);
+  assert.equal(normalizeRepoUrl('ftp://x.com'), null);
 });
 
 // ---------- P3：今日计划 ----------

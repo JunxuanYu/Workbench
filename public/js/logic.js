@@ -106,6 +106,23 @@ export function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// ---------- 远程仓库链接 ----------
+// 归一化远程仓库链接：去空白；空返回 ''；http(s) 链接返回标准化地址（去末尾斜杠）；无协议自动补 https://；非法返回 null
+export function normalizeRepoUrl(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  // 已带协议但不是 http(s)（如 ftp://、ssh://）→ 拒绝（浏览器无法直接打开）
+  if (s.includes('://') && !/^https?:\/\//i.test(s)) return null;
+  const url = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.href.replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
 // ---------- 今日计划 ----------
 // 看"今天"时的有效列表 = 今天自己的 + 所有未完成的过期任务（顺延）
 export function assembleToday(plans, today) {
