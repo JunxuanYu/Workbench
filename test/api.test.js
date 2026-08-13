@@ -123,7 +123,7 @@ test('GET /api/backup 以附件下载、内容与当前数据一致、文件名�
 test('P2 外壳：全部静态资源可访问', async () => {
   const assets = [
     '/css/style.css',
-    '/js/app.js', '/js/api.js', '/js/store.js', '/js/router.js', '/js/logic.js',
+    '/js/app.js', '/js/api.js', '/js/store.js', '/js/router.js', '/js/logic.js', '/js/vault.js',
     '/js/components/util.js', '/js/components/toast.js', '/js/components/empty.js',
     '/js/components/confirm.js', '/js/components/modal.js', '/js/components/dateNav.js',
     '/js/pages/home.js', '/js/pages/today.js', '/js/pages/dev.js', '/js/pages/consult.js',
@@ -157,6 +157,39 @@ test('P2 外壳：导航顺序为「饮食计划」在「账目计划」之后',
 test('P2 外壳：页面模块语法有效（Node 可解析）', async () => {
   const mod = await import('../public/js/pages/today.js');
   assert.equal(typeof mod.render, 'function');
+});
+
+test('P2 外壳：settings 页面模块语法有效（含密码箱）', async () => {
+  const mod = await import('../public/js/pages/settings.js');
+  assert.equal(typeof mod.render, 'function');
+});
+
+// ---------- 密码箱（vault）数据层 ----------
+test('PUT 含密码箱（vault 密文）的数据 → 200 且 GET 读回一致', async () => {
+  const d = defaultData();
+  d.vault = { salt: 'c2FsdA==', iterations: 1000, data: 'aWF2Y2lwaGVy' };
+  const r = await fetch(`${base}/api/data`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(d)
+  });
+  assert.equal(r.status, 200);
+  const back = await (await fetch(`${base}/api/data`)).json();
+  assert.deepEqual(back.vault, d.vault, '密文应原样保存');
+});
+
+test('PUT 非法 vault 结构 → 400 且数据不被破坏', async () => {
+  const before = await (await fetch(`${base}/api/data`)).json();
+  const d = defaultData();
+  d.vault = { salt: 'x' }; // 缺 iterations/data
+  const r = await fetch(`${base}/api/data`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(d)
+  });
+  assert.equal(r.status, 400);
+  const after = await (await fetch(`${base}/api/data`)).json();
+  assert.deepEqual(after.vault, before.vault, '非法请求后密码箱数据未变');
 });
 
 describe('持久化：重启服务后数据仍在', () => {

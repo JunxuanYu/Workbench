@@ -47,11 +47,12 @@ test('日期：周以周一开始，weekStart/End 正确', () => {
 });
 
 // ---------- 默认数据与校验 ----------
-test('默认数据：结构完整、分类7个且全部内置', () => {
+test('默认数据：结构完整、分类7个且全部内置、vault 未设置', () => {
   const d = defaultData();
   assert.deepEqual(validateData(d), { ok: true, errors: [] });
   assert.equal(d.categories.length, 7);
   assert.ok(d.categories.every(c => c.builtin));
+  assert.equal(d.vault, null, '密码箱默认未设置');
 });
 
 test('校验：非对象/缺version/缺字段 均拒绝', () => {
@@ -61,6 +62,18 @@ test('校验：非对象/缺version/缺字段 均拒绝', () => {
   const d = defaultData();
   delete d.projects;
   assert.equal(validateData(d).ok, false);
+});
+
+test('校验：vault 可选字段，null 合法、非法结构拒绝、合法结构通过', () => {
+  const d = defaultData();
+  delete d.vault;
+  assert.equal(validateData(d).ok, true, '旧数据没有 vault 也应通过');
+  d.vault = [];
+  assert.equal(validateData(d).ok, false, '数组不是合法 vault');
+  d.vault = { salt: 'c2FsdA==', iterations: 1000, data: 'aWF2Y2lwaGVy' };
+  assert.equal(validateData(d).ok, true, '合法加密结构应通过');
+  d.vault = { salt: 'x' };
+  assert.equal(validateData(d).ok, false, '缺 iterations/data 应拒绝');
 });
 
 test('校验：budgets 为可选字段（兼容旧数据），存在时必须是对象', () => {

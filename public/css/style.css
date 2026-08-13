@@ -103,7 +103,7 @@ p.page-sub { color: var(--text-soft); font-size: 13px; margin-bottom: 18px; }
 .btn-icon { border: none; background: transparent; cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 6px; }
 .btn-icon:hover { background: var(--gray-light); }
 
-input[type=text], input[type=number], input[type=date], input[type=time], select, textarea {
+input[type=text], input[type=password], input[type=number], input[type=date], input[type=time], select, textarea {
   font-family: inherit;
   font-size: 14px;
   padding: 8px 10px;

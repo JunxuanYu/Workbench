@@ -1,5 +1,6 @@
 // WorkLift 纯逻辑模块：不依赖 DOM，浏览器与 Node 共用（测试直接 import）
 // 所有日期均为本地日期字符串 YYYY-MM-DD（避免 UTC 时区差一天）
+import { validateVault } from './vault.js';
 
 export function pad2(n) { return String(n).padStart(2, '0'); }
 
@@ -62,6 +63,7 @@ export function defaultData() {
   return {
     version: 1,
     updatedAt: null,
+    vault: null,
     memos: [],
     plans: {},
     projects: [],
@@ -98,6 +100,10 @@ export function validateData(o) {
   // budgets 为可选字段（兼容旧数据），但一旦存在必须是对象
   if ('budgets' in o && (o.budgets === null || typeof o.budgets !== 'object' || Array.isArray(o.budgets))) {
     errors.push('budgets 必须是对象');
+  }
+  // vault 为可选字段（兼容旧数据）：null 或合法加密结构（内容为密文，仅校验形状）
+  if ('vault' in o && !validateVault(o.vault).ok) {
+    errors.push('vault 格式不正确');
   }
   return { ok: errors.length === 0, errors };
 }
