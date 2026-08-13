@@ -103,7 +103,7 @@ p.page-sub { color: var(--text-soft); font-size: 13px; margin-bottom: 18px; }
 .btn-icon { border: none; background: transparent; cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 6px; }
 .btn-icon:hover { background: var(--gray-light); }
 
-input[type=text], input[type=number], input[type=date], select, textarea {
+input[type=text], input[type=number], input[type=date], input[type=time], select, textarea {
   font-family: inherit;
   font-size: 14px;
   padding: 8px 10px;
@@ -116,6 +116,30 @@ input[type=text], input[type=number], input[type=date], select, textarea {
 }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 textarea { resize: vertical; min-height: 64px; }
+
+/* 日期/时间选择框 */
+input[type=date], input[type=time] {
+  cursor: pointer;
+  color-scheme: light;
+}
+input[type=date]:hover, input[type=time]:hover { border-color: #c9ccd1; }
+input[type=date]:focus, input[type=time]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(74, 108, 247, .14);
+}
+input[type=date]::-webkit-calendar-picker-indicator,
+input[type=time]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 4px;
+  opacity: .6;
+  transition: opacity .15s, background .15s;
+}
+input[type=date]::-webkit-calendar-picker-indicator:hover,
+input[type=time]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  background: var(--gray-light);
+}
 
 .empty {
   text-align: center;
@@ -146,16 +170,31 @@ textarea { resize: vertical; min-height: 64px; }
 /* 日期导航条 */
 .date-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .date-nav-label {
-  border: none;
-  background: transparent;
-  font-size: 16px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 15px;
   font-weight: 600;
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 6px 12px;
   border-radius: 8px;
   font-family: inherit;
+  color: var(--text);
+  box-shadow: var(--shadow);
+  transition: border-color .15s, box-shadow .15s, transform .15s, background .15s;
 }
-.date-nav-label:hover { background: var(--gray-light); }
+.date-nav-label::before {
+  content: '📅';
+  margin-right: 6px;
+  font-size: 13px;
+  vertical-align: -1px;
+}
+.date-nav-label:hover { border-color: #c9ccd1; background: var(--gray-light); }
+.date-nav-label:active { transform: scale(.96); }
+.date-nav-label:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(74, 108, 247, .14);
+}
 
 /* 标签页 */
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
