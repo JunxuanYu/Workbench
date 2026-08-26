@@ -4,7 +4,8 @@ import { toast } from '../components/toast.js';
 import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
-import { projectCounts, todayStr, uid, moveTask, normalizeRepoUrl } from '../logic.js';
+import { openLocalPath } from '../api.js';
+import { projectCounts, todayStr, uid, moveTask, moveProject, normalizeRepoUrl, parseDocLinks, formatDocLinks, isWebLink } from '../logic.js';
 
 let selectedId = null;
 const STATUSES = [
@@ -78,7 +79,18 @@ export async function render(container) {
       const c = projectCounts(p);
       const item = document.createElement('div');
       item.className = 'row';
-      item.style.cssText = 'cursor:pointer;' + (p.id === selectedId ? 'border-color:var(--accent);background:#eef1fe;' : '');
+      item.style.cssText = 'cursor:grab;' + (p.id === selectedId ? 'border-color:var(--accent);background:#eef1fe;' : '');
+      item.draggable = true;
+      item.dataset.projectId = p.id;
+      item.addEventListener('dragstart', e => {
+        e.dataTransfer.setData('text/plain', p.id);
+        e.dataTransfer.effectAllowed = 'move';
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+        leftCard.querySelectorAll('.row').forEach(r => r.classList.remove('drop-target'));
+      });
       item.onclick = () => { selectedId = p.id; render(container); };
       const name = document.createElement('div');
       name.style.cssText = 'font-weight:600;font-size:13px;';
@@ -91,6 +103,38 @@ export async function render(container) {
       item.append(inner);
       leftCard.append(item);
     }
+
+    // 左栏拖拽放置目标
+    leftCard.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const target = e.target.closest('.row');
+      if (target) {
+        leftCard.querySelectorAll('.row').forEach(r => r.classList.remove('drop-target'));
+        target.classList.add('drop-target');
+      }
+    });
+    leftCard.addEventListener('dragleave', e => {
+      if (!leftCard.contains(e.relatedTarget)) {
+        leftCard.querySelectorAll('.row').forEach(r => r.classList.remove('drop-target'));
+      }
+    });
+    leftCard.addEventListener('drop', e => {
+      e.preventDefault();
+      leftCard.querySelectorAll('.row').forEach(r => r.classList.remove('drop-target'));
+      const id = e.dataTransfer.getData('text/plain');
+      if (!id) return;
+      const target = e.target.closest('.row');
+      if (!target || target.dataset.projectId === id) return;
+      const allRows = [...leftCard.querySelectorAll('.row')];
+      const targetIdx = allRows.indexOf(target);
+      // 计算实际插入位置：如果拖到目标下方则+1
+      const rect = target.getBoundingClientRect();
+      const insertIdx = e.clientY > rect.top + rect.offsetHeight / 2 ? targetIdx + 1 : targetIdx;
+      mutate(s => { moveProject(s.projects, id, insertIdx); });
+      toast('已移动');
+      render(container);
+    });
   }
   left.append(leftCard);
   wrap.append(left);
@@ -320,6 +364,38 @@ export async function render(container) {
       note.textContent = t.note;
       inner.append(note);
     }
+    const links = t.links || [];
+    if (links.length) {
+      const linksEl = document.createElement('div');
+      linksEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;margin-top:3px;';
+      for (const l of links) {
+        const el = document.createElement('a');
+        el.className = 'badge badge-blue';
+        el.style.cssText = 'text-decoration:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        if (isWebLink(l.url)) {
+          // 网页链接：新标签页直接打开
+          el.href = l.url;
+          el.target = '_blank';
+          el.rel = 'noopener noreferrer';
+          el.textContent = `🔗 ${l.title}`;
+          el.title = `${l.title}\n${l.url}`;
+          el.onclick = e => e.stopPropagation(); // 只打开文档，不触发任务编辑弹窗
+        } else {
+          // 本地文件/文件夹：由本机服务调系统默认程序打开（浏览器禁止 http 页面跳 file://）
+          el.href = '#';
+          el.textContent = `📄 ${l.title}`;
+          el.title = `${l.title}\n${l.url}\n（点击用系统默认程序打开）`;
+          el.onclick = async e => {
+            e.preventDefault();
+            e.stopPropagation();
+            try { await openLocalPath(l.url); toast('已打开'); }
+            catch (err) { toast(err.message); }
+          };
+        }
+        linksEl.append(el);
+      }
+      inner.append(linksEl);
+    }
     row.append(inner);
     if (t.priority === 'important') {
       const star = document.createElement('span');
@@ -354,14 +430,17 @@ export async function render(container) {
       fields: [
         { key: 'title', label: '任务标题', type: 'text', required: true },
         { key: 'priority', label: '优先级', type: 'select', options: [{ value: 'normal', label: '普通' }, { value: 'important', label: '⭐ 重要' }] },
-        { key: 'note', label: '备注（可选）', type: 'text' }
+        { key: 'note', label: '备注（可选）', type: 'text' },
+        { key: 'links', label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）', type: 'textarea', placeholder: '例如：\nPRD | https://github.com/user/repo/blob/main/PRD.md\n需求文档 | D:\\资料\\需求.docx' }
       ],
       values: { priority: 'normal' },
       onSubmit: async v => {
+        const parsed = parseDocLinks(v.links);
+        if (!parsed.ok) throw new Error(parsed.error);
         mutate(s => {
           const p = s.projects.find(x => x.id === projId);
           if (!p.tasks) p.tasks = [];
-          p.tasks.push({ id: uid('t'), title: v.title.trim(), status, priority: v.priority, note: v.note.trim() });
+          p.tasks.push({ id: uid('t'), title: v.title.trim(), status, priority: v.priority, note: v.note.trim(), links: parsed.links });
         });
         toast('已添加');
         render(ctx);
@@ -376,14 +455,17 @@ export async function render(container) {
         { key: 'title', label: '任务标题', type: 'text', required: true },
         { key: 'status', label: '状态', type: 'select', options: STATUSES.map(s => ({ value: s.key, label: s.label })) },
         { key: 'priority', label: '优先级', type: 'select', options: [{ value: 'normal', label: '普通' }, { value: 'important', label: '⭐ 重要' }] },
-        { key: 'note', label: '备注', type: 'text' }
+        { key: 'note', label: '备注', type: 'text' },
+        { key: 'links', label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）', type: 'textarea', placeholder: '例如：\nPRD | https://github.com/user/repo/blob/main/PRD.md\n需求文档 | D:\\资料\\需求.docx' }
       ],
-      values: { title: t.title, status: t.status, priority: t.priority || 'normal', note: t.note || '' },
+      values: { title: t.title, status: t.status, priority: t.priority || 'normal', note: t.note || '', links: formatDocLinks(t.links) },
       onSubmit: async v => {
+        const parsed = parseDocLinks(v.links);
+        if (!parsed.ok) throw new Error(parsed.error);
         mutate(s => {
           const p = s.projects.find(x => x.id === projId);
           const task = (p.tasks || []).find(x => x.id === t.id);
-          Object.assign(task, { title: v.title.trim(), status: v.status, priority: v.priority, note: v.note.trim() });
+          Object.assign(task, { title: v.title.trim(), status: v.status, priority: v.priority, note: v.note.trim(), links: parsed.links });
         });
         toast('已保存');
         render(ctx);

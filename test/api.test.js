@@ -192,6 +192,64 @@ test('PUT 非法 vault 结构 → 400 且数据不被破坏', async () => {
   assert.deepEqual(after.vault, before.vault, '非法请求后密码箱数据未变');
 });
 
+// ---------- P11：关联文档 - 打开本地文件/文件夹接口 ----------
+test('POST /api/open 缺少路径 → 400', async () => {
+  const r = await fetch(`${base}/api/open`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  });
+  assert.equal(r.status, 400);
+  assert.ok((await r.json()).error);
+});
+
+test('POST /api/open 路径不存在 → 404 且提示路径', async () => {
+  const r = await fetch(`${base}/api/open`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: path.join(tmpDir, 'no-such-file-xyz.md') })
+  });
+  assert.equal(r.status, 404);
+  assert.match((await r.json()).error, /不存在/);
+});
+
+test('POST /api/open 非 application/json 内容被拒（防跨站简单请求触发打开任意文件）', async () => {
+  const r = await fetch(`${base}/api/open`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ path: tmpDir })
+  });
+  assert.equal(r.status, 400, 'express.json 不解析 text/plain → body 为空 → 400');
+});
+
+test('GET /api/open 不提供（防 <img src> 等跨站 GET 触发打开）', async () => {
+  const r = await fetch(`${base}/api/open?path=${encodeURIComponent(tmpDir)}`);
+  assert.equal(r.status, 404);
+});
+
+// ---------- P11：openLocalPath 客户端封装（旧版本服务兜底提示） ----------
+test('P11 openLocalPath：旧实例返回非 JSON 404 时提示重启应用', async () => {
+  const mod = await import('../public/js/api.js');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('<!doctype html>Cannot POST /api/open', { status: 404, headers: { 'Content-Type': 'text/html' } });
+  try {
+    await assert.rejects(() => mod.openLocalPath('D:\\x.md'), /重新运行 start\.bat/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('P11 openLocalPath：服务端 JSON 错误信息原样抛出（如路径不存在）', async () => {
+  const mod = await import('../public/js/api.js');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: '本地路径不存在：D:\\x.md' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+  try {
+    await assert.rejects(() => mod.openLocalPath('D:\\x.md'), /本地路径不存在/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 describe('持久化：重启服务后数据仍在', () => {
   let s2, base2, file2, dir2;
   before(async () => {

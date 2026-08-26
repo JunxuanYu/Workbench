@@ -5,7 +5,9 @@ import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { dateNav } from '../components/dateNav.js';
-import { assembleToday, overdueItems, todayStr, addDays, uid, formatPlanTime, validateTimeRange } from '../logic.js';
+import { assembleToday, overdueItems, todayStr, addDays, formatPlanTime, validateTimeRange, buildPlanFromRow, parseDocLinks, formatDocLinks, isWebLink } from '../logic.js';
+import { esc } from '../components/util.js';
+import { openLocalPath } from '../api.js';
 
 let viewDate = todayStr();
 let tab = 'all'; // all | today | tomorrow | overdue
@@ -25,43 +27,52 @@ export async function render(container) {
     onChange: v => { viewDate = v; render(container); }
   }));
 
-  // 添加框：明天标签下默认加到明天；可填开始/结束时间（可选）
+  // 卡片式添加：点按钮弹出与「编辑」一致的表单卡片；「明天」标签下日期默认填次日
+  const defaultDate = () => (tab === 'tomorrow' ? addDays(viewDate, 1) : viewDate);
   const addRow = document.createElement('div');
-  addRow.style.cssText = 'display:flex;gap:8px;margin-bottom:14px;';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.placeholder = tab === 'tomorrow' ? '加一件明天的事，回车即添加...' : '加一件事，回车即添加...';
-  const startTime = document.createElement('input');
-  startTime.type = 'time';
-  startTime.title = '开始时间（可选）';
-  startTime.style.cssText = 'width:96px;flex-shrink:0;';
-  const endTime = document.createElement('input');
-  endTime.type = 'time';
-  endTime.title = '结束时间（可选）';
-  endTime.style.cssText = 'width:96px;flex-shrink:0;';
+  addRow.style.cssText = 'display:flex;gap:10px;align-items:center;margin-bottom:14px;';
   const addBtn = document.createElement('button');
   addBtn.className = 'btn btn-primary';
-  addBtn.textContent = '+ 添加';
-  const doAdd = () => {
-    const text = input.value.trim();
-    if (!text) return;
-    const check = validateTimeRange(startTime.value, endTime.value);
-    if (!check.ok) { toast(check.error); return; }
-    const targetDate = tab === 'tomorrow' ? addDays(viewDate, 1) : viewDate;
-    mutate(s => {
-      if (!s.plans[targetDate]) s.plans[targetDate] = [];
-      s.plans[targetDate].push({ id: uid('p'), text, done: false, important: false, note: '', origDate: targetDate, timeStart: startTime.value, timeEnd: endTime.value });
-    });
-    input.value = '';
-    startTime.value = '';
-    endTime.value = '';
-    toast('已添加');
-    render(container);
-  };
-  input.onkeydown = e => { if (e.key === 'Enter') doAdd(); };
-  addBtn.onclick = doAdd;
-  addRow.append(input, startTime, endTime, addBtn);
+  addBtn.textContent = '+ 添加计划';
+  addBtn.onclick = showAddForm;
+  const addHint = document.createElement('span');
+  addHint.style.cssText = 'font-size:13px;color:var(--text-soft);';
+  addHint.textContent = tab === 'tomorrow' ? '日期默认填明天，可修改' : '';
+  addRow.append(addBtn);
+  if (addHint.textContent) addRow.append(addHint);
   container.append(addRow);
+
+  // 添加计划表单：字段与「编辑计划」一致；提交经 buildPlanFromRow 校验并构造
+  function showAddForm() {
+    openForm({
+      title: '添加计划',
+      fields: [
+        { key: 'text', label: '内容', type: 'text', required: true },
+        { key: 'date', label: '日期', type: 'date', required: true },
+        { key: 'timeStart', label: '开始时间（可选）', type: 'time' },
+        { key: 'timeEnd', label: '结束时间（可选）', type: 'time' },
+        { key: 'important', label: '优先级', type: 'select', options: [{ value: '1', label: '⭐ 重要' }, { value: '0', label: '普通' }] },
+        { key: 'note', label: '备注', type: 'text' },
+        { key: 'links', label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）', type: 'textarea', placeholder: '例如：\n会议纪要 | https://docs.example.com/notes\n周报模板 | D:\\资料\\周报.docx' }
+      ],
+      values: { text: '', date: defaultDate(), timeStart: '', timeEnd: '', important: '0', note: '', links: '' },
+      onSubmit: async v => {
+        const check = validateTimeRange(v.timeStart, v.timeEnd);
+        if (!check.ok) throw new Error(check.error);
+        const parsed = parseDocLinks(v.links);
+        if (!parsed.ok) throw new Error(parsed.error);
+        const r = buildPlanFromRow({ text: v.text, date: v.date, timeStart: v.timeStart, timeEnd: v.timeEnd, important: v.important === '1', note: v.note });
+        if (!r.ok) throw new Error(r.error);
+        mutate(s => {
+          const d = r.item.origDate;
+          if (!s.plans[d]) s.plans[d] = [];
+          s.plans[d].push({ ...r.item, links: parsed.links });
+        });
+        toast('已添加');
+        render(container);
+      }
+    });
+  }
 
   // 标签
   const tabs = document.createElement('div');
@@ -158,6 +169,16 @@ export async function render(container) {
       note.title = it.note;
       row.append(note);
     }
+    const links = it.links || [];
+    if (links.length) {
+      const lb = document.createElement('span');
+      lb.className = 'badge badge-blue';
+      lb.textContent = `📎 ${links.length}`;
+      lb.style.cursor = 'pointer';
+      lb.title = `关联文档（点击查阅）：${links.map(l => l.title).join('、')}`;
+      lb.onclick = () => openDocsViewer(it.text, links);
+      row.append(lb);
+    }
 
     const actions = document.createElement('div');
     actions.className = 'row-actions';
@@ -188,12 +209,15 @@ export async function render(container) {
             { key: 'timeStart', label: '开始时间（可选）', type: 'time' },
             { key: 'timeEnd', label: '结束时间（可选）', type: 'time' },
             { key: 'important', label: '优先级', type: 'select', options: [{ value: '1', label: '⭐ 重要' }, { value: '0', label: '普通' }] },
-            { key: 'note', label: '备注', type: 'text' }
+            { key: 'note', label: '备注', type: 'text' },
+            { key: 'links', label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）', type: 'textarea', placeholder: '例如：\n会议纪要 | https://docs.example.com/notes\n周报模板 | D:\\资料\\周报.docx' }
           ],
-          values: { text: it.text, date: it._src, timeStart: it.timeStart || '', timeEnd: it.timeEnd || '', important: it.important ? '1' : '0', note: it.note || '' },
+          values: { text: it.text, date: it._src, timeStart: it.timeStart || '', timeEnd: it.timeEnd || '', important: it.important ? '1' : '0', note: it.note || '', links: formatDocLinks(it.links) },
           onSubmit: async v => {
             const check = validateTimeRange(v.timeStart, v.timeEnd);
             if (!check.ok) throw new Error(check.error);
+            const parsed = parseDocLinks(v.links);
+            if (!parsed.ok) throw new Error(parsed.error);
             mutate(s => {
               const arr = s.plans[it._src] || [];
               const idx = arr.findIndex(x => x.id === it.id);
@@ -204,6 +228,7 @@ export async function render(container) {
                 text: v.text.trim(),
                 important: v.important === '1',
                 note: v.note.trim(),
+                links: parsed.links,
                 origDate: v.date,
                 timeStart: v.timeStart,
                 timeEnd: v.timeEnd
@@ -237,4 +262,59 @@ export async function render(container) {
     row.append(actions);
     return row;
   }
+}
+
+// 文档查阅弹窗：列出计划项关联的文档；网页链接在新标签页打开，本地文件/文件夹由本机服务调系统默认程序打开
+function openDocsViewer(itemText, links) {
+  const root = document.getElementById('modal-root');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  const rowStyle = 'text-decoration:none;color:inherit;';
+  const infoStyle = 'flex:1;min-width:0;';
+  const urlStyle = 'font-size:11px;color:var(--text-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  const listHtml = links.map(l => {
+    if (isWebLink(l.url)) {
+      return `
+    <a class="row doc-view-row" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" style="${rowStyle}">
+      <div style="${infoStyle}">
+        <div style="font-size:13px;font-weight:600;">🔗 ${esc(l.title)}</div>
+        <div style="${urlStyle}">${esc(l.url)}</div>
+      </div>
+      <span class="badge badge-blue">打开 ↗</span>
+    </a>`;
+    }
+    return `
+    <a class="row doc-view-row doc-view-local" href="#" data-path="${esc(l.url)}" style="${rowStyle}">
+      <div style="${infoStyle}">
+        <div style="font-size:13px;font-weight:600;">📄 ${esc(l.title)}</div>
+        <div style="${urlStyle}">${esc(l.url)}</div>
+      </div>
+      <span class="badge badge-gray">系统打开</span>
+    </a>`;
+  }).join('');
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-title">📎 关联文档</div>
+      <div class="modal-body">
+        <p class="confirm-msg">${esc(itemText)}</p>
+        <div>${listHtml}</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" data-act="close">关闭</button>
+      </div>
+    </div>`;
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('[data-act="close"]').onclick = close;
+  // 网页行：正常新标签跳转，不触发遮罩关闭
+  overlay.querySelectorAll('.doc-view-row:not(.doc-view-local)').forEach(a => a.addEventListener('click', e => e.stopPropagation()));
+  // 本地行：调本机服务用系统默认程序打开
+  overlay.querySelectorAll('.doc-view-local').forEach(a => {
+    a.addEventListener('click', async e => {
+      e.preventDefault();
+      try { await openLocalPath(a.dataset.path); toast('已打开'); }
+      catch (err) { toast(err.message); }
+    });
+  });
+  root.appendChild(overlay);
 }

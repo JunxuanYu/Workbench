@@ -5,8 +5,8 @@ import {
   defaultData, validateData,
   todayStr, addDays, formatDate, weekdayOf, monthKey, addMonths,
   weekStartOf, weekEndOf, isInRange,
-  assembleToday, overdueItems, planProgress, formatPlanTime, validateTimeRange,
-  projectCounts, allDevDoing, logsOnDate, moveTask,
+  assembleToday, overdueItems, planProgress, formatPlanTime, validateTimeRange, buildPlanFromRow,
+  projectCounts, allDevDoing, logsOnDate, moveTask, moveProject,
   clientFeeSummary, consultWeekCount, allPendingFees,
   dietProgress, daysSinceLastMeal,
   ledgerMonthStats, expenseToday, categoryRanking, categoryPercentages,
@@ -15,7 +15,9 @@ import {
   formatMemoTime, parseMemoTime, memoIsDue, sortMemos,
   pendingPlanPreview, doingTasksPreview, consultRecordsInRange, mealEntriesOn, recentLedger,
   addCategory, canDeleteCategory,
-  normalizeRepoUrl
+  normalizeRepoUrl,
+  normalizeHttpUrl, docLinkTitle, parseDocLinks, formatDocLinks,
+  normalizeLocalPath, isWebLink, docFileTitle
 } from '../public/js/logic.js';
 
 // ---------- 日期工具 ----------
@@ -171,6 +173,55 @@ test('P3 时间段：validateTimeRange 校验格式与先后顺序', () => {
   assert.deepEqual(validateTimeRange('', '25:00'), { ok: false, error: '结束时间格式不正确' });
 });
 
+test('P3 表格式添加：buildPlanFromRow 内容/日期必填校验', () => {
+  assert.deepEqual(buildPlanFromRow({ text: '   ', date: '2026-08-11' }), { ok: false, error: '请填写内容' });
+  assert.deepEqual(buildPlanFromRow({ text: '写周报', date: '' }), { ok: false, error: '请选择日期' });
+  assert.deepEqual(buildPlanFromRow({}), { ok: false, error: '请填写内容' }, '整行全空应拒绝');
+  assert.equal(buildPlanFromRow(null).ok, false, '入参为空对象/缺省时应拒绝而非抛错');
+});
+
+test('P3 表格式添加：buildPlanFromRow 复用时间段校验', () => {
+  assert.deepEqual(
+    buildPlanFromRow({ text: '开会', date: '2026-08-11', timeStart: '9:00', timeEnd: '' }),
+    { ok: false, error: '开始时间格式不正确' }
+  );
+  assert.deepEqual(
+    buildPlanFromRow({ text: '开会', date: '2026-08-11', timeStart: '10:00', timeEnd: '09:00' }),
+    { ok: false, error: '结束时间不能早于开始时间' }
+  );
+});
+
+test('P3 表格式添加：buildPlanFromRow 合法行构造完整计划项', () => {
+  const r = buildPlanFromRow({
+    text: '  写周报  ', date: '2026-08-12',
+    timeStart: '09:00', timeEnd: '10:30', important: true, note: '  提交给领导 '
+  });
+  assert.equal(r.ok, true);
+  const it = r.item;
+  assert.ok(it.id.startsWith('p_'), 'id 应以 p_ 前缀生成');
+  assert.equal(it.text, '写周报', '内容两端空白应去除');
+  assert.equal(it.done, false);
+  assert.equal(it.important, true);
+  assert.equal(it.note, '提交给领导', '备注两端空白应去除');
+  assert.equal(it.origDate, '2026-08-12');
+  assert.equal(it.timeStart, '09:00');
+  assert.equal(it.timeEnd, '10:30');
+  // 与快捷添加的历史数据结构一致：不含 links 字段
+  assert.equal('links' in it, false);
+  const r2 = buildPlanFromRow({ text: '散步', date: '2026-08-12', timeStart: ' 09:05 ', timeEnd: '' });
+  assert.equal(r2.item.timeStart, '09:05', '时间值两端空白应去除');
+  assert.equal(r2.item.timeEnd, '');
+});
+
+test('P3 表格式添加：buildPlanFromRow 缺省字段取默认值', () => {
+  const r = buildPlanFromRow({ text: '读书', date: '2026-08-13' });
+  assert.equal(r.ok, true);
+  assert.equal(r.item.important, false, '优先级默认普通');
+  assert.equal(r.item.note, '', '备注默认空');
+  assert.equal(r.item.timeStart, '', '开始时间默认空');
+  assert.equal(r.item.timeEnd, '', '结束时间默认空');
+});
+
 // ---------- P4：开发工作 ----------
 test('P4 项目任务计数：三状态分别统计', () => {
   const p = {
@@ -245,6 +296,47 @@ test('P4 拖拽：任务不存在时不做任何修改', () => {
   const r = moveTask(p, 'nope', 'doing', 0);
   assert.equal(r.changed, false);
   assert.equal(p.tasks[0].status, 'todo');
+});
+
+test('P4 项目排序：移动项目到指定位置', () => {
+  const projects = [
+    { id: 'p1', name: 'A' },
+    { id: 'p2', name: 'B' },
+    { id: 'p3', name: 'C' }
+  ];
+  const r = moveProject(projects, 'p1', 2);
+  assert.equal(r.changed, true);
+  assert.equal(r.index, 2);
+  assert.deepEqual(projects.map(p => p.id), ['p2', 'p3', 'p1']);
+});
+
+test('P4 项目排序：移动项目到列首', () => {
+  const projects = [
+    { id: 'p1', name: 'A' },
+    { id: 'p2', name: 'B' },
+    { id: 'p3', name: 'C' }
+  ];
+  moveProject(projects, 'p3', 0);
+  assert.deepEqual(projects.map(p => p.id), ['p3', 'p1', 'p2']);
+});
+
+test('P4 项目排序：目标索引越界收拢到边界', () => {
+  const projects = [
+    { id: 'p1', name: 'A' },
+    { id: 'p2', name: 'B' }
+  ];
+  moveProject(projects, 'p1', 99);
+  assert.deepEqual(projects.map(p => p.id), ['p2', 'p1'], '超出末尾应移到最后');
+  moveProject(projects, 'p2', -5);
+  assert.deepEqual(projects.map(p => p.id), ['p2', 'p1'], '负数应移到最前');
+});
+
+test('P4 项目排序：项目不存在时不做任何修改', () => {
+  const projects = [{ id: 'p1', name: 'A' }];
+  const r = moveProject(projects, 'nope', 0);
+  assert.equal(r.changed, false);
+  assert.equal(r.index, -1);
+  assert.deepEqual(projects.map(p => p.id), ['p1']);
 });
 
 // ---------- P5：咨询工作 ----------
@@ -527,4 +619,132 @@ test('P9 删除分类：默认分类不可删、被使用的自定义分类不�
   assert.equal(canDeleteCategory(cats, '宠物', ledger).ok, false);
   assert.equal(canDeleteCategory(cats, '宠物', []).ok, true);
   assert.equal(canDeleteCategory(cats, '不存在', []).ok, false);
+});
+
+// ---------- P10：备注关联文档（开发工作/今日计划共用） ----------
+test('P10 关联文档：parseDocLinks 解析纯链接/标题|链接/空行混合', () => {
+  assert.deepEqual(parseDocLinks(''), { ok: true, links: [] });
+  assert.deepEqual(parseDocLinks('   \n  '), { ok: true, links: [] });
+  const r = parseDocLinks('https://github.com/user/repo\n\n需求文档 | https://example.com/prd\n');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.links, [
+    { title: 'repo', url: 'https://github.com/user/repo' },
+    { title: '需求文档', url: 'https://example.com/prd' }
+  ]);
+});
+
+test('P10 关联文档：无协议自动补 https、末尾斜杠去除', () => {
+  const r = parseDocLinks('docs.example.com/api/');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.links, [{ title: 'api', url: 'https://docs.example.com/api' }]);
+});
+
+test('P10 关联文档：非法/缺失链接整体拒绝并提示行号', () => {
+  assert.equal(parseDocLinks('not a url').ok, false);
+  assert.match(parseDocLinks('not a url').error, /第 1 行/);
+  assert.match(parseDocLinks('https://ok.com\nftp://bad.com').error, /第 2 行/);
+  assert.match(parseDocLinks('只有标题|').error, /缺少链接/);
+});
+
+test('P10 关联文档：formatDocLinks 序列化且与 parse 往返一致', () => {
+  assert.equal(formatDocLinks([]), '');
+  assert.equal(formatDocLinks(undefined), '');
+  const links = [
+    { title: 'PRD', url: 'https://example.com/prd' },
+    { title: '', url: 'https://github.com/u/r' }
+  ];
+  assert.equal(formatDocLinks(links), 'PRD|https://example.com/prd\nhttps://github.com/u/r');
+  const r = parseDocLinks(formatDocLinks([{ title: 'PRD', url: 'https://example.com/prd' }]));
+  assert.deepEqual(r.links, [{ title: 'PRD', url: 'https://example.com/prd' }], 'format → parse 应还原相同结构');
+});
+
+test('P10 关联文档：docLinkTitle 从路径段/主机名推导默认标题', () => {
+  assert.equal(docLinkTitle('https://github.com/u/repo/blob/main/README.md'), 'README');
+  assert.equal(docLinkTitle('https://docs.example.com/api/%E6%8C%87%E5%8D%97.pdf'), '指南');
+  assert.equal(docLinkTitle('https://example.com'), 'example.com');
+});
+
+test('P10 数据兼容：项目任务带 links 数组可通过 validateData（服务端不拒绝新字段）', () => {
+  const d = defaultData();
+  d.projects.push({
+    id: 'p1', name: 'X', desc: '', repoUrl: '',
+    tasks: [{ id: 't1', title: '任务A', status: 'todo', priority: 'normal', note: '', links: [{ title: 'PRD', url: 'https://example.com/prd' }] }],
+    logs: []
+  });
+  assert.deepEqual(validateData(d), { ok: true, errors: [] });
+});
+
+test('P10 数据兼容：今日计划项带 links 数组可通过 validateData（服务端不拒绝新字段）', () => {
+  const d = defaultData();
+  d.plans['2026-08-23'] = [
+    { id: 'pl1', text: '写周报', done: false, important: false, note: '', origDate: '2026-08-23',
+      links: [{ title: '会议纪要', url: 'https://docs.example.com/notes' }, { title: '周报模板', url: 'https://example.com/tpl' }] }
+  ];
+  assert.deepEqual(validateData(d), { ok: true, errors: [] });
+  // 旧数据无 links 字段依旧通过
+  const old = defaultData();
+  old.plans['2026-08-23'] = [{ id: 'pl2', text: '旧条目', done: false, important: false, note: '' }];
+  assert.deepEqual(validateData(old), { ok: true, errors: [] });
+});
+
+test('P10 关联文档：Windows CRLF 换行可正常解析（textarea 常见输入）', () => {
+  const r = parseDocLinks('需求 | https://a.com/x\r\nhttps://b.com/y\r\n\r\n');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.links, [
+    { title: '需求', url: 'https://a.com/x' },
+    { title: 'y', url: 'https://b.com/y' }
+  ]);
+});
+
+// ---------- P11：关联文档支持本地文件/文件夹路径 ----------
+test('P11 本地路径：normalizeLocalPath 识别盘符/UNC/POSIX、去引号、拒绝相对路径与网页', () => {
+  assert.equal(normalizeLocalPath(''), '');
+  assert.equal(normalizeLocalPath('   '), '');
+  assert.equal(normalizeLocalPath('C:\\docs\\PRD.md'), 'C:\\docs\\PRD.md');
+  assert.equal(normalizeLocalPath('C:/docs/PRD.md'), 'C:/docs/PRD.md');
+  assert.equal(normalizeLocalPath('"D:\\path with space\\a.md"'), 'D:\\path with space\\a.md', '去掉复制文件地址带的引号');
+  assert.equal(normalizeLocalPath("'E:\\x.txt'"), 'E:\\x.txt');
+  assert.equal(normalizeLocalPath('\\\\server\\share\\docs'), '\\\\server\\share\\docs');
+  assert.equal(normalizeLocalPath('/home/user/readme.md'), '/home/user/readme.md');
+  assert.equal(normalizeLocalPath('https://example.com'), null, '网页链接不是本地路径');
+  assert.equal(normalizeLocalPath('notes.md'), null, '相对路径有歧义不支持');
+  assert.equal(normalizeLocalPath('docs.example.com/api'), null, '域名走网页逻辑');
+});
+
+test('P11 本地路径：parseDocLinks 混合解析本地与网页、默认取文件名做标题、支持带引号整行', () => {
+  const r = parseDocLinks('需求文档 | D:\\资料\\需求.docx\nhttps://github.com/u/r\n"C:\\会议纪要\\2026-08-周会.docx"');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.links, [
+    { title: '需求文档', url: 'D:\\资料\\需求.docx' },
+    { title: 'r', url: 'https://github.com/u/r' },
+    { title: '2026-08-周会.docx', url: 'C:\\会议纪要\\2026-08-周会.docx' }
+  ]);
+});
+
+test('P11 本地路径：含反斜杠的非法输入给出针对性错误提示（不误判为域名）', () => {
+  const r = parseDocLinks('docs\\readme.md');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /不是有效的本地绝对路径/);
+  assert.match(parseDocLinks('标题|notes\\a.pdf').error, /第 1 行/);
+});
+
+test('P11 本地路径：isWebLink 区分网页与本地；docFileTitle 取末段文件名', () => {
+  assert.equal(isWebLink('https://a.com'), true);
+  assert.equal(isWebLink('http://a.com/x'), true);
+  assert.equal(isWebLink('D:\\a.md'), false);
+  assert.equal(isWebLink('\\\\s\\share'), false);
+  assert.equal(isWebLink(''), false);
+  assert.equal(docFileTitle('D:\\docs\\PRD.md'), 'PRD.md');
+  assert.equal(docFileTitle('/home/u/报告.pdf'), '报告.pdf');
+  assert.equal(docFileTitle('D:\\资料\\'), '资料', '尾部分隔符去除');
+  assert.equal(docFileTitle('\\\\server\\share'), 'share');
+});
+
+test('P11 本地路径：format → parse 往返保留本地路径，空标题由文件名推导', () => {
+  const src = [{ title: 'PRD', url: 'D:\\docs\\PRD.md' }, { title: '', url: 'C:\\a.md' }];
+  const r = parseDocLinks(formatDocLinks(src));
+  assert.deepEqual(r.links, [
+    { title: 'PRD', url: 'D:\\docs\\PRD.md' },
+    { title: 'a.md', url: 'C:\\a.md' }
+  ]);
 });

@@ -112,9 +112,9 @@ export function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// ---------- 远程仓库链接 ----------
-// 归一化远程仓库链接：去空白；空返回 ''；http(s) 链接返回标准化地址（去末尾斜杠）；无协议自动补 https://；非法返回 null
-export function normalizeRepoUrl(raw) {
+// ---------- http(s) 链接归一化（远程仓库/关联文档共用） ----------
+// 归一化 http(s) 链接：去空白；空返回 ''；无协议自动补 https://；非法或非 http(s) 协议（如 ftp://）返回 null
+export function normalizeHttpUrl(raw) {
   const s = String(raw || '').trim();
   if (!s) return '';
   // 已带协议但不是 http(s)（如 ftp://、ssh://）→ 拒绝（浏览器无法直接打开）
@@ -127,6 +127,97 @@ export function normalizeRepoUrl(raw) {
   } catch {
     return null;
   }
+}
+
+// 归一化远程仓库链接（复用通用 http(s) 归一化，保留原名称供旧调用方使用）
+export function normalizeRepoUrl(raw) {
+  return normalizeHttpUrl(raw);
+}
+
+// ---------- 备注关联文档（开发工作/今日计划共用，支持网页链接与本地文件/文件夹路径） ----------
+// 归一化本地路径：去空白与首尾引号（兼容"复制文件地址"自带的引号）
+// 合法返回原样路径（保留原生分隔符）；空返回 ''；非本地绝对路径（网页链接/相对路径等）返回 null
+export function normalizeLocalPath(raw) {
+  const s = String(raw || '').trim().replace(/^["']+|["']+$/g, '').trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return null;   // 明确是网页链接
+  if (/^[a-zA-Z]:[\\/]/.test(s)) return s;    // Windows 盘符路径 C:\ 或 C:/
+  if (/^\\\\/.test(s)) return s;              // UNC 共享 \\server\share\...
+  if (/^\//.test(s)) return s;                // POSIX 绝对路径 /home/...
+  return null;                                // 相对路径有歧义，不支持
+}
+
+// 判断已存链接是否为网页链接（否则视为本地路径，点击时由本机服务调系统默认程序打开）
+export function isWebLink(url) {
+  return /^https?:\/\//i.test(String(url || ''));
+}
+
+// 本地路径默认标题：最后一段文件/文件夹名（保留扩展名，便于辨认文档类型）
+export function docFileTitle(p) {
+  const seg = String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop();
+  return seg || String(p || '');
+}
+
+// 从 URL 推导默认展示标题：取路径最后一段（去扩展名），无路径段则用主机名
+export function docLinkTitle(url) {
+  try {
+    const u = new URL(url);
+    const seg = u.pathname.split('/').filter(Boolean).pop();
+    if (!seg) return u.hostname;
+    let name = seg;
+    try { name = decodeURIComponent(seg); } catch { /* 保留原段落 */ }
+    return name.replace(/\.[a-z0-9]+$/i, '') || u.hostname;
+  } catch {
+    return url;
+  }
+}
+
+// 解析"关联文档"多行文本 → { ok: true, links: [{ title, url }] }
+// 每行一条：`链接/本地路径` 或 `标题|链接或路径`；空行跳过；任一行缺少/非法则整体失败并提示行号
+// 本地路径支持盘符（C:\、C:/）、UNC 共享、POSIX 绝对路径；raw 为空或全空白 → { ok: true, links: [] }（兼容 \r\n 换行）
+export function parseDocLinks(raw) {
+  const lines = String(raw || '').split(/\r?\n/);
+  const links = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let title = '';
+    let linkPart = line;
+    const barIdx = line.indexOf('|');
+    if (barIdx !== -1) {
+      title = line.slice(0, barIdx).trim();
+      linkPart = line.slice(barIdx + 1).trim();
+    }
+    // 本地文件/文件夹路径优先识别
+    const local = normalizeLocalPath(linkPart);
+    if (local === '') return { ok: false, error: `第 ${i + 1} 行缺少链接` };
+    if (local !== null) {
+      links.push({ title: title || docFileTitle(local), url: local });
+      continue;
+    }
+    // 含反斜杠但不是合法本地绝对路径 → 大概率想填本地文件，给出针对性提示而非当成域名
+    if (linkPart.includes('\\')) {
+      return { ok: false, error: `第 ${i + 1} 行「${linkPart}」不是有效的本地绝对路径（如 D:\\docs\\PRD.md）` };
+    }
+    const url = normalizeHttpUrl(linkPart);
+    if (url === '') return { ok: false, error: `第 ${i + 1} 行缺少链接` };
+    if (url === null) return { ok: false, error: `第 ${i + 1} 行「${linkPart}」不是有效链接` };
+    links.push({ title: title || docLinkTitle(url), url });
+  }
+  return { ok: true, links };
+}
+
+// 将 links 数组序列化为编辑表单文本（每行 `标题|链接`，无标题仅链接），供编辑弹窗回填
+export function formatDocLinks(links) {
+  return (Array.isArray(links) ? links : [])
+    .map(l => {
+      const t = String(l?.title || '').trim();
+      const u = String(l?.url || '').trim();
+      if (!u) return '';
+      return t ? `${t}|${u}` : u;
+    })
+    .filter(Boolean)
+    .join('\n');
 }
 
 // ---------- 今日计划 ----------
@@ -183,6 +274,31 @@ export function validateTimeRange(start, end) {
   return { ok: true };
 }
 
+// 今日计划·表格式添加：校验表格一行输入并构造新计划项（纯函数，不依赖 DOM）
+// 行字段：text 内容（必填）、date 日期（必填）、timeStart/timeEnd 时间（可选）、important 是否重要、note 备注
+export function buildPlanFromRow(row) {
+  const { text, date, timeStart = '', timeEnd = '', important = false, note = '' } = row || {};
+  const t = String(text ?? '').trim();
+  if (!t) return { ok: false, error: '请填写内容' };
+  const d = String(date ?? '').trim();
+  if (!d) return { ok: false, error: '请选择日期' };
+  const check = validateTimeRange(timeStart, timeEnd);
+  if (!check.ok) return check;
+  return {
+    ok: true,
+    item: {
+      id: uid('p'),
+      text: t,
+      done: false,
+      important: !!important,
+      note: String(note ?? '').trim(),
+      origDate: d,
+      timeStart: String(timeStart ?? '').trim(),
+      timeEnd: String(timeEnd ?? '').trim()
+    }
+  };
+}
+
 // ---------- 开发工作 ----------
 export function projectCounts(project) {
   const c = { todo: 0, doing: 0, done: 0 };
@@ -198,6 +314,17 @@ export function logsOnDate(projects, date) {
   let n = 0;
   for (const p of projects) for (const l of p.logs || []) if (l.date === date) n++;
   return n;
+}
+
+// 拖拽移动项目：在数组中按目标位置重新排列（同项目拖动也可重排）
+// targetIndex 为目标插入位置，越界自动收拢到边界
+export function moveProject(projects, projectId, targetIndex) {
+  const i = projects.findIndex(p => p.id === projectId);
+  if (i === -1) return { index: -1, changed: false };
+  const [project] = projects.splice(i, 1);
+  const idx = Math.max(0, Math.min(targetIndex, projects.length));
+  projects.splice(idx, 0, project);
+  return { index: idx, changed: true };
 }
 
 // 拖拽移动任务：改状态 + 在目标列按 order 重新编号排序（同列拖动也可重排）

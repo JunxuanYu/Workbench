@@ -34,6 +34,18 @@ function writeAtomic(filePath, data) {
   fs.renameSync(tmp, filePath);
 }
 
+// 用系统默认程序打开本地文件/文件夹（供「关联文档」点击调用；浏览器禁止 http 页面直接跳 file://，由本机服务代为打开）
+function openWithOS(target) {
+  if (process.platform === 'win32') {
+    // start 的第一个带引号参数是窗口标题，需额外传空标题
+    return spawn('cmd', ['/c', 'start', '', target], { detached: true, stdio: 'ignore' }).unref();
+  }
+  if (process.platform === 'darwin') {
+    return spawn('open', [target], { detached: true, stdio: 'ignore' }).unref();
+  }
+  return spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref();
+}
+
 export function createApp(dataFile = DEFAULT_DATA_FILE) {
   ensureDataFile(dataFile);
   const app = express();
@@ -81,6 +93,25 @@ export function createApp(dataFile = DEFAULT_DATA_FILE) {
       res.json({ filePath: dataFile, size: stat.size, updatedAt: data.updatedAt || null });
     } catch (e) {
       res.status(500).json({ error: '读取数据信息失败' });
+    }
+  });
+
+  // 打开本地文件/文件夹。仅接受 application/json 的 POST：
+  // 浏览器会拦截跨站 JSON POST（需预检通过），外部网页无法借 <img>/<form> 等简单请求诱导打开任意文件
+  app.post('/api/open', (req, res) => {
+    const p = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
+    if (!p) return res.status(400).json({ error: '缺少要打开的本地路径' });
+    try {
+      const st = fs.statSync(p);
+      if (!st.isFile() && !st.isDirectory()) return res.status(400).json({ error: '路径既不是文件也不是文件夹' });
+    } catch (e) {
+      return res.status(404).json({ error: `本地路径不存在：${p}` });
+    }
+    try {
+      openWithOS(p);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: '调用系统程序打开失败' });
     }
   });
 

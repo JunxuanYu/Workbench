@@ -287,3 +287,8 @@ input[type=time]::-webkit-calendar-picker-indicator:hover {
 .task-row { transition: opacity .1s, transform .1s; }
 .task-row.dragging { opacity: .45; transform: rotate(1deg); }
 .task-row.dragging * { pointer-events: none; }
+
+/* ---------- 项目列表：拖拽 ---------- */
+.row.dragging { opacity: .45; }
+.row.dragging * { pointer-events: none; }
+.row.drop-target { border-top: 2px solid var(--accent); }
