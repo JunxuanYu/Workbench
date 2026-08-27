@@ -42,3 +42,16 @@ export function replaceState(newState) {
   state.updatedAt = new Date().toISOString();
   scheduleSave();
 }
+
+// 立即保存未落盘的防抖数据（如关闭服务前调用，避免丢失最近变更）
+export async function flushSave() {
+  clearTimeout(timer);
+  if (!state) return;
+  const snapshot = JSON.parse(JSON.stringify(state));
+  try {
+    await saveData(snapshot);
+  } catch (e) {
+    toast('保存失败，请重试');
+    throw e;
+  }
+}

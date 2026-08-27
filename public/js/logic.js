@@ -1,6 +1,7 @@
 // WorkLift 纯逻辑模块：不依赖 DOM，浏览器与 Node 共用（测试直接 import）
 // 所有日期均为本地日期字符串 YYYY-MM-DD（避免 UTC 时区差一天）
 import { validateVault } from './vault.js';
+import { isThemeKey, normalizeTheme, THEME_DEFAULT } from './theme.js';
 
 export function pad2(n) { return String(n).padStart(2, '0'); }
 
@@ -64,6 +65,7 @@ export function defaultData() {
     version: 1,
     updatedAt: null,
     vault: null,
+    settings: { theme: 'white' },
     memos: [],
     plans: {},
     projects: [],
@@ -104,6 +106,12 @@ export function validateData(o) {
   // vault 为可选字段（兼容旧数据）：null 或合法加密结构（内容为密文，仅校验形状）
   if ('vault' in o && !validateVault(o.vault).ok) {
     errors.push('vault 格式不正确');
+  }
+  // settings 为可选字段（兼容旧数据）：对象；theme 若存在必须是合法主题键，否则自动回退默认
+  if ('settings' in o && (o.settings === null || typeof o.settings !== 'object' || Array.isArray(o.settings))) {
+    errors.push('settings 必须是对象');
+  } else if (o.settings && 'theme' in o.settings && !isValidTheme(o.settings.theme)) {
+    errors.push(`settings.theme 非法：${o.settings.theme}`);
   }
   return { ok: errors.length === 0, errors };
 }
@@ -539,3 +547,22 @@ export function canDeleteCategory(categories, name, ledger) {
   if ((ledger || []).some(e => e.category === name)) return { ok: false, error: '该分类下已有账目，请先修改账目' };
   return { ok: true };
 }
+
+// ---------- 工作台外观（主题） ----------
+export function isValidTheme(key) { return isThemeKey(key); }
+
+// 读取当前主题：state.settings.theme 非法/缺失时回退默认
+export function currentTheme(state) {
+  const t = state && state.settings && state.settings.theme;
+  return normalizeTheme(t);
+}
+
+// 设置主题：返回 { ok, theme, error }
+export function setTheme(state, key) {
+  if (!isValidTheme(key)) return { ok: false, theme: currentTheme(state), error: '无效的主题' };
+  if (!state.settings) state.settings = {};
+  state.settings.theme = key;
+  return { ok: true, theme: key, error: null };
+}
+
+export { THEME_DEFAULT };

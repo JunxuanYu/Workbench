@@ -21,7 +21,7 @@ html, body { height: 100%; }
 body {
   font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
   color: var(--text);
-  background: #f7f8fa;
+  background: var(--bg);
   display: flex;
   min-height: 100vh;
 }
@@ -30,7 +30,7 @@ body {
 .sidebar {
   width: 216px;
   flex-shrink: 0;
-  background: #fff;
+  background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -57,8 +57,33 @@ body {
   transition: background .15s;
 }
 .nav-item:hover { background: var(--gray-light); }
-.nav-item.active { background: #eef1fe; color: var(--accent); font-weight: 600; }
+.nav-item.active { background: var(--nav-active); color: var(--accent); font-weight: 600; }
 .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+
+/* 左侧栏底部：工作台关闭按钮 */
+.sidebar-bottom {
+  margin-top: auto;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+.close-workbench-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text-soft);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all .15s;
+}
+.close-workbench-btn:hover { background: var(--red); border-color: var(--red); color: #fff; }
+.close-workbench-btn:active { transform: scale(.97); }
 
 .main {
   flex: 1;
@@ -71,7 +96,7 @@ body {
 h1.page-title { font-size: 22px; margin-bottom: 4px; }
 p.page-sub { color: var(--text-soft); font-size: 13px; margin-bottom: 18px; }
 .card {
-  background: #fff;
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -82,7 +107,7 @@ p.page-sub { color: var(--text-soft); font-size: 13px; margin-bottom: 18px; }
   align-items: center;
   gap: 6px;
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--panel);
   color: var(--text);
   padding: 7px 14px;
   border-radius: 8px;
@@ -110,7 +135,7 @@ input[type=text], input[type=password], input[type=number], input[type=date], in
   border: 1px solid var(--border);
   border-radius: 8px;
   outline: none;
-  background: #fff;
+  background: var(--panel);
   color: var(--text);
   width: 100%;
 }
@@ -148,7 +173,7 @@ input[type=time]::-webkit-calendar-picker-indicator:hover {
   font-size: 14px;
   border: 1px dashed var(--border);
   border-radius: var(--radius);
-  background: #fbfbfc;
+  background: var(--bg);
   cursor: pointer;
   transition: border-color .15s;
 }
@@ -171,7 +196,7 @@ input[type=time]::-webkit-calendar-picker-indicator:hover {
 .date-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .date-nav-label {
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--panel);
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
@@ -200,7 +225,7 @@ input[type=time]::-webkit-calendar-picker-indicator:hover {
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
 .tab {
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--panel);
   padding: 6px 14px;
   border-radius: 20px;
   font-size: 13px;
@@ -236,7 +261,7 @@ input[type=time]::-webkit-calendar-picker-indicator:hover {
   padding: 20px;
 }
 .modal {
-  background: #fff;
+  background: var(--panel);
   border-radius: 14px;
   width: 100%;
   max-width: 440px;
@@ -262,7 +287,7 @@ input[type=time]::-webkit-calendar-picker-indicator:hover {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--panel);
   margin-bottom: 8px;
 }
 .row.done .row-text { text-decoration: line-through; color: var(--text-soft); }
@@ -292,3 +317,34 @@ input[type=time]::-webkit-calendar-picker-indicator:hover {
 .row.dragging { opacity: .45; }
 .row.dragging * { pointer-events: none; }
 .row.drop-target { border-top: 2px solid var(--accent); }
+
+/* ---------- 工作台页面外观（主题）选择器 ---------- */
+.appearance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  cursor: pointer;
+  transition: all .15s;
+  font-family: inherit;
+}
+.theme-option:hover { border-color: var(--accent); box-shadow: var(--shadow); }
+.theme-option.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.theme-swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(0,0,0,.12);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.4);
+}
+.theme-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.theme-desc { font-size: 11px; color: var(--text-soft); }

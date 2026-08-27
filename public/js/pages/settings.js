@@ -10,6 +10,7 @@ import {
   isVaultConfigured, createVault, unlockVault, sealVault,
   validateMasterPassword, addVaultEntry, updateVaultEntry, removeVaultEntry
 } from '../vault.js';
+import { THEMES, applyTheme } from '../theme.js';
 
 const KIND_LABEL = { expense: '支出', income: '收入', both: '通用' };
 
@@ -30,6 +31,44 @@ export async function render(container) {
   container.append(title, sub);
 
   const state = getState();
+
+  // ---------- 页面外观（工作台主题） ----------
+  const appearanceCard = document.createElement('div');
+  appearanceCard.className = 'card';
+  appearanceCard.style.cssText = 'margin-bottom:14px;';
+  appearanceCard.append(sectionTitle('🎨 工作台外观'));
+  const appearTip = document.createElement('p');
+  appearTip.style.cssText = 'font-size:13px;line-height:1.8;color:var(--text-soft);margin-bottom:12px;';
+  appearTip.textContent = '选择工作台整体配色，即刻生效并自动保存。';
+  appearanceCard.append(appearTip);
+  const activeTheme = state.settings ? state.settings.theme : 'white';
+  const grid = document.createElement('div');
+  grid.className = 'appearance-grid';
+  for (const [key, def] of Object.entries(THEMES)) {
+    const opt = document.createElement('button');
+    opt.type = 'button';
+    opt.className = 'theme-option' + (key === activeTheme ? ' active' : '');
+    opt.dataset.theme = key;
+    opt.title = def.desc;
+    const swatch = document.createElement('span');
+    swatch.className = 'theme-swatch';
+    swatch.style.background = def.swatch;
+    const label = document.createElement('span');
+    label.className = 'theme-label';
+    label.textContent = def.label;
+    const desc = document.createElement('span');
+    desc.className = 'theme-desc';
+    desc.textContent = def.desc;
+    opt.append(swatch, label, desc);
+    opt.onclick = () => {
+      mutate(s => { s.settings = s.settings || {}; s.settings.theme = key; });
+      applyTheme(document.body, key);
+      render(container);
+    };
+    grid.append(opt);
+  }
+  appearanceCard.append(grid);
+  container.append(appearanceCard);
 
   // ---------- 密码箱 ----------
   const vaultCard = document.createElement('div');

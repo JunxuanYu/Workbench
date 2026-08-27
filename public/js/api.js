@@ -28,6 +28,21 @@ export function downloadBackup() {
   window.location.href = '/api/backup';
 }
 
+// 请求关闭 WorkLift 服务（本机 Node 服务优雅关闭并退出）
+export async function shutdownServer() {
+  const r = await fetch('/api/shutdown', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  if (!r.ok) {
+    let msg = '';
+    try { msg = (await r.json()).error || ''; } catch { /* 忽略 */ }
+    throw new Error(msg || `关闭失败（HTTP ${r.status}）`);
+  }
+  return r.json();
+}
+
 // 用系统默认程序打开本地文件/文件夹（由本机 WorkLift 服务执行；浏览器不允许 http 页面直接打开 file:// 链接）
 export async function openLocalPath(p) {
   const r = await fetch('/api/open', {

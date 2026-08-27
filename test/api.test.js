@@ -279,3 +279,45 @@ describe('持久化：重启服务后数据仍在', () => {
     fs.rmSync(dir2, { recursive: true, force: true });
   });
 });
+
+// 关闭服务端点：/api/shutdown 返回 ok 并触发注入的 onShutdown 回调
+describe('POST /api/shutdown', () => {
+  let s3, base3, dir3, file3, shutdownFired;
+
+  before(async () => {
+    dir3 = fs.mkdtempSync(path.join(os.tmpdir(), 'worklift-shutdown-'));
+    file3 = path.join(dir3, 'data.json');
+    shutdownFired = false;
+    const app3 = createApp(file3, {
+      onShutdown: () => { shutdownFired = true; }
+    });
+    await new Promise(r => { s3 = app3.listen(0, '127.0.0.1', r); });
+    base3 = `http://127.0.0.1:${s3.address().port}`;
+  });
+
+  test('GET /api/shutdown 返回 404（仅接受 POST，防止被简单请求触发）', async () => {
+    const r = await fetch(`${base3}/api/shutdown`);
+    assert.equal(r.status, 404);
+    assert.equal(shutdownFired, false);
+  });
+
+  test('POST /api/shutdown 返回 ok 并触发 onShutdown 回调', async () => {
+    const r = await fetch(`${base3}/api/shutdown`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.ok, true);
+    // 回调在响应后延迟触发，短暂等待
+    await new Promise(r2 => setTimeout(r2, 80));
+    assert.equal(shutdownFired, true, 'onShutdown 回调应被触发');
+  });
+
+  after(() => {
+    if (shutdownFired) {
+      // 回调只是把标志置 true，未真正关闭服务；此时直接关闭即可
+    }
+    s3?.close();
+    fs.rmSync(dir3, { recursive: true, force: true });
+  });
+});

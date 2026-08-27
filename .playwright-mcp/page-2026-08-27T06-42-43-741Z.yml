@@ -1,0 +1,115 @@
+- generic [active] [ref=e1]:
+  - complementary [ref=e2]:
+    - generic [ref=e3]: 💪 WorkLift
+    - navigation [ref=e4]:
+      - link "🏠 首页总览" [ref=e5] [cursor=pointer]:
+        - /url: "#/home"
+        - generic [ref=e6]: 🏠
+        - text: 首页总览
+      - link "📋 今日计划" [ref=e7] [cursor=pointer]:
+        - /url: "#/today"
+        - generic [ref=e8]: 📋
+        - text: 今日计划
+      - link "💻 开发工作" [ref=e9] [cursor=pointer]:
+        - /url: "#/dev"
+        - generic [ref=e10]: 💻
+        - text: 开发工作
+      - link "🧰 工具箱" [ref=e11] [cursor=pointer]:
+        - /url: "#/consult"
+        - generic [ref=e12]: 🧰
+        - text: 工具箱
+      - link "💰 账目计划" [ref=e13] [cursor=pointer]:
+        - /url: "#/money"
+        - generic [ref=e14]: 💰
+        - text: 账目计划
+      - link "🍚 饮食计划" [ref=e15] [cursor=pointer]:
+        - /url: "#/diet"
+        - generic [ref=e16]: 🍚
+        - text: 饮食计划
+      - link "⚙️ 数据与设置" [ref=e17] [cursor=pointer]:
+        - /url: "#/settings"
+        - generic [ref=e18]: ⚙️
+        - text: 数据与设置
+    - button "⏻ 关闭工作台" [ref=e20] [cursor=pointer]:
+      - generic [ref=e21]: ⏻
+      - text: 关闭工作台
+  - main [ref=e22]:
+    - generic [ref=e23]:
+      - heading "数据与设置" [level=1] [ref=e24]
+      - paragraph [ref=e25]: 密码箱、备份、恢复、清空数据，管理账目分类。
+      - generic [ref=e26]:
+        - generic [ref=e27]: 🎨 工作台外观
+        - paragraph [ref=e28]: 选择工作台整体配色，即刻生效并自动保存。
+        - generic [ref=e29]:
+          - button "白色 明亮清爽" [ref=e30] [cursor=pointer]:
+            - generic [ref=e32]: 白色
+            - generic [ref=e33]: 明亮清爽
+          - button "黄色 温暖活力" [ref=e34] [cursor=pointer]:
+            - generic [ref=e36]: 黄色
+            - generic [ref=e37]: 温暖活力
+          - button "蓝色 沉静专注" [ref=e38] [cursor=pointer]:
+            - generic [ref=e40]: 蓝色
+            - generic [ref=e41]: 沉静专注
+          - button "奶油色 柔和温馨" [ref=e42] [cursor=pointer]:
+            - generic [ref=e44]: 奶油色
+            - generic [ref=e45]: 柔和温馨
+      - generic [ref=e46]:
+        - generic [ref=e47]: 🔐 密码箱
+        - generic [ref=e48]:
+          - generic [ref=e49]: 🔒 已加密锁定
+          - generic [ref=e50]: 条目已隐藏，输入主密码解锁查看。
+          - button "🔓 解锁" [ref=e51] [cursor=pointer]
+      - generic [ref=e52]:
+        - generic [ref=e53]: 数据文件
+        - generic [ref=e54]:
+          - generic [ref=e55]: 文件位置：D:\Blogs\WorkLiftApp\data\worklift-data.json
+          - generic [ref=e56]: 大小：6.1 KB
+          - generic [ref=e57]: 上次保存：2026/8/27 14:41:41
+      - generic [ref=e58]:
+        - generic [ref=e59]: 备份与恢复
+        - generic [ref=e60]:
+          - button "💾 一键备份" [ref=e61] [cursor=pointer]
+          - button "↩ 从备份恢复" [ref=e62] [cursor=pointer]
+          - button "🧹 清空全部数据" [ref=e63] [cursor=pointer]
+      - generic [ref=e64]:
+        - generic [ref=e65]:
+          - generic [ref=e66]: 账目分类
+          - button "＋ 添加分类" [ref=e67] [cursor=pointer]
+        - generic [ref=e69]:
+          - generic [ref=e70]: 餐饮
+          - generic [ref=e71]: 支出
+          - generic [ref=e72]: 默认
+        - generic [ref=e74]:
+          - generic [ref=e75]: 交通
+          - generic [ref=e76]: 支出
+          - generic [ref=e77]: 默认
+        - generic [ref=e79]:
+          - generic [ref=e80]: 购物
+          - generic [ref=e81]: 支出
+          - generic [ref=e82]: 默认
+        - generic [ref=e84]:
+          - generic [ref=e85]: 住房
+          - generic [ref=e86]: 支出
+          - generic [ref=e87]: 默认
+        - generic [ref=e89]:
+          - generic [ref=e90]: 医疗
+          - generic [ref=e91]: 支出
+          - generic [ref=e92]: 默认
+        - generic [ref=e94]:
+          - generic [ref=e95]: 其他
+          - generic [ref=e96]: 支出
+          - generic [ref=e97]: 默认
+        - generic [ref=e99]:
+          - generic [ref=e100]: 工资收入
+          - generic [ref=e101]: 收入
+          - generic [ref=e102]: 默认
+        - generic [ref=e103]:
+          - generic [ref=e104]:
+            - generic [ref=e105]: 兼职
+            - generic [ref=e106]: 收入
+          - button "🗑️" [ref=e107] [cursor=pointer]
+        - generic [ref=e108]:
+          - generic [ref=e109]:
+            - generic [ref=e110]: 通信
+            - generic [ref=e111]: 支出
+          - button "🗑️" [ref=e112] [cursor=pointer]

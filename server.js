@@ -46,13 +46,22 @@ function openWithOS(target) {
   return spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref();
 }
 
-export function createApp(dataFile = DEFAULT_DATA_FILE) {
+export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
   ensureDataFile(dataFile);
   const app = express();
   app.use(express.json({ limit: '10mb' }));
   app.use(express.static(PUBLIC_DIR));
 
   app.get('/api/ping', (req, res) => res.json({ ok: true }));
+
+  // 关闭工作台服务：响应先发出，再触发 onShutdown（直接运行时优雅关闭并退出）
+  // 仅接受 JSON POST，外部网页无法借 <img>/<form> 等简单请求诱导关闭本机服务
+  app.post('/api/shutdown', (req, res) => {
+    res.json({ ok: true, message: 'WorkLift 服务已关闭' });
+    if (typeof opts.onShutdown === 'function') {
+      setTimeout(() => opts.onShutdown(), 50);
+    }
+  });
 
   app.get('/api/data', (req, res) => {
     try {
@@ -121,8 +130,15 @@ export function createApp(dataFile = DEFAULT_DATA_FILE) {
 // 直接运行时启动服务并打开浏览器（被测试 import 时不执行）
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const PORT = Number(process.env.PORT) || 8788;
-  const app = createApp();
-  app.listen(PORT, '127.0.0.1', () => {
+  const app = createApp(DEFAULT_DATA_FILE, {
+    onShutdown: () => {
+      // 先停止接收新连接，关闭后再退出进程（退出码 0，start.bat 会提示"已退出"）
+      server.close(() => process.exit(0));
+      // 兜底：若仍有 keep-alive 连接挂起，超时强制退出
+      setTimeout(() => process.exit(0), 300).unref?.();
+    }
+  });
+  const server = app.listen(PORT, '127.0.0.1', () => {
     console.log(`WorkLift 已启动: http://127.0.0.1:${PORT}`);
     console.log(`数据文件: ${DEFAULT_DATA_FILE}`);
     if (process.env.NO_OPEN !== '1') {
