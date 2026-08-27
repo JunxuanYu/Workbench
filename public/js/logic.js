@@ -345,28 +345,6 @@ export function moveTask(project, taskId, status, targetIndex) {
   return { from, to: status, index: idx, changed: true };
 }
 
-// ---------- 咨询工作 ----------
-export function clientFeeSummary(fees) {
-  let received = 0, pending = 0;
-  for (const f of fees || []) {
-    const amt = Number(f.amount) || 0;
-    if (f.received) received += amt; else pending += amt;
-  }
-  return { received, pending };
-}
-
-export function consultWeekCount(clients, start, end) {
-  let n = 0;
-  for (const c of clients) for (const r of c.records || []) if (isInRange(r.date, start, end)) n++;
-  return n;
-}
-
-export function allPendingFees(clients) {
-  let s = 0;
-  for (const c of clients) s += clientFeeSummary(c.fees).pending;
-  return s;
-}
-
 // ---------- 饮食计划 ----------
 const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
 export function dietProgress(meals, date) {
@@ -499,8 +477,6 @@ export function computeHomeSummary(state, today) {
     planDone: done,
     devDoing: allDevDoing(state.projects || []),
     devLogsToday: logsOnDate(state.projects || [], today),
-    consultWeek: consultWeekCount(state.clients || [], weekStartOf(today), weekEndOf(today)),
-    pendingFees: allPendingFees(state.clients || []),
     mealsToday: dietProgress(state.meals || {}, today).count,
     expenseToday: expenseToday(state.ledger || [], today),
     monthBalance: ledgerMonthStats(state.ledger || [], monthKey(today)).balance
@@ -528,17 +504,6 @@ export function doingTasksPreview(projects, limit = 3) {
     }
   }
   return out;
-}
-
-// 咨询工作预览：指定日期范围内（本周）的记录，按日期倒序取前 N 条
-export function consultRecordsInRange(clients, start, end, limit = 3) {
-  const out = [];
-  for (const c of clients || []) {
-    for (const r of c.records || []) {
-      if (isInRange(r.date, start, end)) out.push({ client: c.name, date: r.date, content: r.content || '' });
-    }
-  }
-  return out.sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
 }
 
 // 饮食预览：当天有记录的餐次，按早餐→午餐→晚餐→加餐顺序

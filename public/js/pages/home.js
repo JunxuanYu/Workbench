@@ -7,9 +7,10 @@ import { emptyEl } from '../components/empty.js';
 import { navigate } from '../router.js';
 import {
   computeHomeSummary, formatDate, todayStr, uid, formatMemoTime, memoIsDue, sortMemos,
-  weekStartOf, weekEndOf, pendingPlanPreview, doingTasksPreview, consultRecordsInRange,
+  pendingPlanPreview, doingTasksPreview,
   mealEntriesOn, recentLedger
 } from '../logic.js';
+import { getTools } from './consult.js';
 
 const fmt = n => (Number.isInteger(n) ? n.toLocaleString('zh-CN') : Number(n).toFixed(2));
 const MEAL_LABELS = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐', snack: '加餐' };
@@ -42,8 +43,7 @@ export async function render(container) {
   container.append(head);
 
   // ---------- 5 张摘要卡（带概要内容导航） ----------
-  const weekStart = weekStartOf(today);
-  const weekEnd = weekEndOf(today);
+  const registeredTools = getTools();
   const cards = [
     {
       route: 'today', icon: '📋', title: '今日计划', big: `完成 ${s.planDone}/${s.planTotal}`, sub: '▶ 去安排',
@@ -54,8 +54,8 @@ export async function render(container) {
       items: doingTasksPreview(state.projects, 3).map(i => `${i.project}：${i.title}`)
     },
     {
-      route: 'consult', icon: '🤝', title: '咨询工作', big: `${s.consultWeek} 次`, sub: `本周咨询 · 待收 ¥${fmt(s.pendingFees)}`,
-      items: consultRecordsInRange(state.clients, weekStart, weekEnd, 3).map(i => `${i.date.slice(5)} ${i.client}${i.content ? ` · ${i.content}` : ''}`)
+      route: 'consult', icon: '🧰', title: '工具箱', big: `${registeredTools.length} 个`, sub: '按需扩展的小工具集合',
+      items: registeredTools.slice(0, 3).map(t => `${t.icon || '🔧'} ${t.name}`)
     },
     {
       route: 'diet', icon: '🍚', title: '饮食计划', big: `${s.mealsToday}/4 餐`, sub: '今天已记录',

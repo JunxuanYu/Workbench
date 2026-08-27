@@ -7,13 +7,12 @@ import {
   weekStartOf, weekEndOf, isInRange,
   assembleToday, overdueItems, planProgress, formatPlanTime, validateTimeRange, buildPlanFromRow,
   projectCounts, allDevDoing, logsOnDate, moveTask, moveProject,
-  clientFeeSummary, consultWeekCount, allPendingFees,
   dietProgress, daysSinceLastMeal,
   ledgerMonthStats, expenseToday, categoryRanking, categoryPercentages,
   monthBudget, setMonthBudget, budgetStatus,
   computeHomeSummary,
   formatMemoTime, parseMemoTime, memoIsDue, sortMemos,
-  pendingPlanPreview, doingTasksPreview, consultRecordsInRange, mealEntriesOn, recentLedger,
+  pendingPlanPreview, doingTasksPreview, mealEntriesOn, recentLedger,
   addCategory, canDeleteCategory,
   normalizeRepoUrl,
   normalizeHttpUrl, docLinkTitle, parseDocLinks, formatDocLinks,
@@ -339,34 +338,6 @@ test('P4 项目排序：项目不存在时不做任何修改', () => {
   assert.deepEqual(projects.map(p => p.id), ['p1']);
 });
 
-// ---------- P5：咨询工作 ----------
-test('P5 客户费用汇总：已收/待收分别合计', () => {
-  const fees = [
-    { amount: 500, received: true },
-    { amount: 1200, received: false },
-    { amount: 300, received: true }
-  ];
-  assert.deepEqual(clientFeeSummary(fees), { received: 800, pending: 1200 });
-  assert.deepEqual(clientFeeSummary([]), { received: 0, pending: 0 });
-});
-
-test('P5 本周咨询次数：周一至周日统计', () => {
-  const clients = [
-    { records: [{ date: '2026-08-10' }, { date: '2026-08-16' }, { date: '2026-08-17' }] },
-    { records: [{ date: '2026-08-12' }] },
-    { records: [] }
-  ];
-  assert.equal(consultWeekCount(clients, '2026-08-10', '2026-08-16'), 3);
-});
-
-test('P5 全部客户待收费用合计', () => {
-  const clients = [
-    { fees: [{ amount: 1200, received: false }, { amount: 100, received: true }] },
-    { fees: [{ amount: 300, received: false }] }
-  ];
-  assert.equal(allPendingFees(clients), 1500);
-});
-
 // ---------- P6：饮食计划 ----------
 test('P6 餐次进度：记了的实心、没记的空心、计数正确', () => {
   const meals = {
@@ -465,9 +436,6 @@ test('P8 首页摘要：各模块数字聚合一致', () => {
     projects: [
       { tasks: [{ status: 'doing' }, { status: 'doing' }, { status: 'done' }], logs: [{ date: '2026-08-11' }] }
     ],
-    clients: [
-      { records: [{ date: '2026-08-10' }], fees: [{ amount: 1200, received: false }] }
-    ],
     meals: { '2026-08-11': { breakfast: { food: 'x' }, lunch: null, dinner: null, snack: null } },
     ledger: [
       { date: '2026-08-11', type: 'expense', amount: 35 },
@@ -479,8 +447,6 @@ test('P8 首页摘要：各模块数字聚合一致', () => {
   assert.equal(s.planDone, 1);
   assert.equal(s.devDoing, 2);
   assert.equal(s.devLogsToday, 1);
-  assert.equal(s.consultWeek, 1);
-  assert.equal(s.pendingFees, 1200);
   assert.equal(s.mealsToday, 1);
   assert.equal(s.expenseToday, 35);
   assert.equal(s.monthBalance, 7965);    // 8000 - 35
@@ -560,18 +526,6 @@ test('P8 概要：进行中任务预览跨项目取前 N 条', () => {
     { project: 'B', title: 'T4' }
   ]);
   assert.deepEqual(doingTasksPreview([], 3), []);
-});
-
-test('P8 概要：本周咨询记录预览带客户名与内容，倒序取前 N', () => {
-  const clients = [
-    { name: '张三', records: [{ date: '2026-08-10', content: '咨询A' }, { date: '2026-08-17', content: '下周' }] },
-    { name: '李四', records: [{ date: '2026-08-12' }] }
-  ];
-  assert.deepEqual(consultRecordsInRange(clients, '2026-08-10', '2026-08-16', 3), [
-    { client: '李四', date: '2026-08-12', content: '' },
-    { client: '张三', date: '2026-08-10', content: '咨询A' }
-  ]);
-  assert.deepEqual(consultRecordsInRange([], '2026-08-10', '2026-08-16', 3), []);
 });
 
 test('P8 概要：当日饮食条目按餐次顺序输出', () => {
