@@ -5,7 +5,7 @@ import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { dateNav } from '../components/dateNav.js';
-import { assembleToday, overdueItems, todayStr, addDays, formatPlanTime, validateTimeRange, buildPlanFromRow, parseDocLinks, formatDocLinks, isWebLink } from '../logic.js';
+import { assembleToday, overdueItems, todayStr, addDays, formatPlanTime, validateTimeRange, buildPlanFromRow, parseDocLinks, formatDocLinks, isWebLink, reorderPlansBySequence } from '../logic.js';
 import { esc } from '../components/util.js';
 import { openLocalPath } from '../api.js';
 
@@ -115,11 +115,65 @@ export async function render(container) {
       for (const it of done) listEl.append(buildRow(it, true, container));
     }
   }
+
+  // 拖拽排序：仅待完成项可拖动；放下时按新的展示顺序持久化各源日期的顺序
+  const clearDropHints = () => listEl.querySelectorAll('.row.drop-target').forEach(r => r.classList.remove('drop-target'));
+  listEl.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const target = e.target.closest('.row:not(.done):not(.dragging)');
+    clearDropHints();
+    if (target) target.classList.add('drop-target');
+  });
+  listEl.addEventListener('dragleave', e => {
+    if (!listEl.contains(e.relatedTarget)) clearDropHints();
+  });
+  listEl.addEventListener('drop', e => {
+    e.preventDefault();
+    clearDropHints();
+    const dragId = e.dataTransfer.getData('text/plain');
+    if (!dragId) return;
+    const rows = [...listEl.querySelectorAll('.row:not(.done)')];
+    const dragRow = rows.find(r => r.dataset.id === dragId);
+    if (!dragRow) return;
+    const targetRow = e.target.closest('.row:not(.done)');
+    // 构造去掉被拖项后的新顺序，依据光标位置插入到目标行的前/后
+    const seq = [];
+    for (const r of rows) {
+      if (r.dataset.id === dragId) continue;
+      seq.push({ date: r.dataset.src, id: r.dataset.id });
+    }
+    let insertAt = seq.length; // 默认放到末尾
+    if (targetRow && targetRow !== dragRow) {
+      const tIdx = seq.findIndex(x => x.id === targetRow.dataset.id);
+      const rect = targetRow.getBoundingClientRect();
+      insertAt = e.clientY > rect.top + rect.offsetHeight / 2 ? tIdx + 1 : tIdx;
+    }
+    seq.splice(insertAt, 0, { date: dragRow.dataset.src, id: dragId });
+    mutate(s => { reorderPlansBySequence(s.plans, seq); });
+    toast('已排序');
+    render(container);
+  });
   container.append(listEl);
 
   function buildRow(it, isDone, ctx) {
     const row = document.createElement('div');
     row.className = 'row' + (isDone ? ' done' : '');
+    row.dataset.id = it.id;
+    row.dataset.src = it._src;
+    if (!isDone) {
+      row.draggable = true;
+      row.style.cursor = 'grab';
+      row.addEventListener('dragstart', e => {
+        e.dataTransfer.setData('text/plain', it.id);
+        e.dataTransfer.effectAllowed = 'move';
+        row.classList.add('dragging');
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        listEl.querySelectorAll('.row.drop-target').forEach(r => r.classList.remove('drop-target'));
+      });
+    }
 
     const cb = document.createElement('input');
     cb.type = 'checkbox';

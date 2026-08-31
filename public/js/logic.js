@@ -353,6 +353,32 @@ export function moveTask(project, taskId, status, targetIndex) {
   return { from, to: status, index: idx, changed: true };
 }
 
+// 拖拽排序今日计划：按新的展示顺序重排各源日期的计划数组（多日期混合视图也成立，跨日期拖动无碍）
+// seq：新顺序的 [{ date, id }, ...]，date 为该计划项真实存储的日期（原 _src），仅含待排序的未完成项
+// 返回：是否发生变更。已完成及其他未列为待排序的项保持原相对顺序，附在各源日期的末尾。
+export function reorderPlansBySequence(plans, seq) {
+  const byDate = new Map();
+  for (const s of seq || []) {
+    if (!s || !s.date || !s.id) continue;
+    if (!byDate.has(s.date)) byDate.set(s.date, []);
+    byDate.get(s.date).push(s.id);
+  }
+  let changed = false;
+  for (const [date, ids] of byDate) {
+    const arr = (plans && plans[date]) || [];
+    if (!arr.length) continue;
+    const byId = new Map(arr.map(x => [x.id, x]));
+    const wanted = ids.map(id => byId.get(id)).filter(Boolean);
+    const rest = arr.filter(x => !ids.includes(x.id));
+    const next = [...wanted, ...rest];
+    if (next.length !== arr.length || next.some((x, i) => x !== arr[i])) {
+      plans[date] = next;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // ---------- 饮食计划 ----------
 const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
 export function dietProgress(meals, date) {

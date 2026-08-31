@@ -6,7 +6,7 @@ import {
   todayStr, addDays, formatDate, weekdayOf, monthKey, addMonths,
   weekStartOf, weekEndOf, isInRange,
   assembleToday, overdueItems, planProgress, formatPlanTime, validateTimeRange, buildPlanFromRow,
-  projectCounts, allDevDoing, logsOnDate, moveTask, moveProject,
+  projectCounts, allDevDoing, logsOnDate, moveTask, moveProject, reorderPlansBySequence,
   dietProgress, daysSinceLastMeal,
   ledgerMonthStats, expenseToday, categoryRanking, categoryPercentages,
   monthBudget, setMonthBudget, budgetStatus,
@@ -337,6 +337,102 @@ test('P4 项目排序：项目不存在时不做任何修改', () => {
   assert.equal(r.index, -1);
   assert.deepEqual(projects.map(p => p.id), ['p1']);
 });
+
+// ---------- P2：今日计划拖拽排序 ----------
+test('P2 拖拽排序：同一天内重排多个未完成项', () => {
+  const plans = {
+    '2026-08-31': [
+      { id: 'p1', text: 'A', done: false },
+      { id: 'p2', text: 'B', done: false },
+      { id: 'p3', text: 'C', done: false }
+    ]
+  };
+  // 把 p3 拖到最前
+  const changed = reorderPlansBySequence(plans, [
+    { date: '2026-08-31', id: 'p3' },
+    { date: '2026-08-31', id: 'p1' },
+    { date: '2026-08-31', id: 'p2' }
+  ]);
+  assert.equal(changed, true);
+  assert.deepEqual(plans['2026-08-31'].map(p => p.id), ['p3', 'p1', 'p2']);
+});
+
+test('P2 拖拽排序：已完成项保持原相对顺序附在末尾', () => {
+  const plans = {
+    '2026-08-31': [
+      { id: 'p1', text: 'A', done: false },
+      { id: 'p2', text: 'B', done: false },
+      { id: 'p3', text: 'C', done: true },
+      { id: 'p4', text: 'D', done: true }
+    ]
+  };
+  reorderPlansBySequence(plans, [
+    { date: '2026-08-31', id: 'p2' },
+    { date: '2026-08-31', id: 'p1' }
+  ]);
+  const ids = plans['2026-08-31'].map(p => p.id);
+  assert.deepEqual(ids, ['p2', 'p1', 'p3', 'p4'], '已完成项 p3/p4 保持原顺序排在末尾');
+});
+
+test('P2 拖拽排序：跨日期（顺延项）也能按展示顺序持久化', () => {
+  const plans = {
+    '2026-08-31': [
+      { id: 't1', text: '今天任务', done: false },
+      { id: 't2', text: '今天次要', done: false }
+    ],
+    '2026-08-30': [
+      { id: 'c1', text: '昨日顺延', done: false }
+    ]
+  };
+  // 拖拽：把昨日顺延 c1 拖到今天的 t2 之后
+  reorderPlansBySequence(plans, [
+    { date: '2026-08-31', id: 't1' },
+    { date: '2026-08-31', id: 't2' },
+    { date: '2026-08-30', id: 'c1' }
+  ]);
+  assert.deepEqual(plans['2026-08-31'].map(p => p.id), ['t1', 't2']);
+  assert.deepEqual(plans['2026-08-30'].map(p => p.id), ['c1']);
+});
+
+test('P2 拖拽排序：未变化的顺序返回 changed=false 且数组不变', () => {
+  const plans = {
+    '2026-08-31': [
+      { id: 'p1', text: 'A', done: false },
+      { id: 'p2', text: 'B', done: false }
+    ]
+  };
+  const before = JSON.stringify(plans);
+  const changed = reorderPlansBySequence(plans, [
+    { date: '2026-08-31', id: 'p1' },
+    { date: '2026-08-31', id: 'p2' }
+  ]);
+  assert.equal(changed, false);
+  assert.equal(JSON.stringify(plans), before);
+});
+
+test('P2 拖拽排序：seq 含未知 id 或非法项时安全跳过', () => {
+  const plans = {
+    '2026-08-31': [
+      { id: 'p1', text: 'A', done: false },
+      { id: 'p2', text: 'B', done: false }
+    ]
+  };
+  reorderPlansBySequence(plans, [
+    { date: '2026-08-31', id: 'ghost' },
+    { date: '2026-08-31', id: 'p2' },
+    { id: 'p1' } // 缺 date，忽略
+  ]);
+  // ghost 不存在被忽略；p1 缺 date 不参与排序，仅在 seq 之外的项按原顺序附后
+  assert.deepEqual(plans['2026-08-31'].map(p => p.id), ['p2', 'p1']);
+});
+
+test('P2 拖拽排序：空 seq / 无对应日期 / plans 为空 均安全', () => {
+  const plans = { '2026-08-31': [{ id: 'p1', text: 'A', done: false }] };
+  assert.equal(reorderPlansBySequence(plans, []), false);
+  assert.equal(reorderPlansBySequence(plans, [{ date: '2026-09-01', id: 'p1' }]), false);
+  assert.equal(reorderPlansBySequence(null, [{ date: '2026-08-31', id: 'x' }]), false);
+});
+
 
 // ---------- P6：饮食计划 ----------
 test('P6 餐次进度：记了的实心、没记的空心、计数正确', () => {
