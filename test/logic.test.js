@@ -6,7 +6,7 @@ import {
   todayStr, addDays, formatDate, weekdayOf, monthKey, addMonths,
   weekStartOf, weekEndOf, isInRange,
   assembleToday, overdueItems, planProgress, formatPlanTime, validateTimeRange, buildPlanFromRow,
-  projectCounts, allDevDoing, logsOnDate, moveTask, moveProject, reorderPlansBySequence,
+  projectCounts, allDevDoing, logsOnDate, moveTask, moveProject, deleteTask, reorderPlansBySequence,
   dietProgress, daysSinceLastMeal,
   ledgerMonthStats, expenseToday, categoryRanking, categoryPercentages,
   monthBudget, setMonthBudget, budgetStatus,
@@ -295,6 +295,57 @@ test('P4 拖拽：任务不存在时不做任何修改', () => {
   const r = moveTask(p, 'nope', 'doing', 0);
   assert.equal(r.changed, false);
   assert.equal(p.tasks[0].status, 'todo');
+});
+
+test('P4 删除任务：从数组中移除指定任务，其余任务保持不变', () => {
+  const p = {
+    tasks: [
+      { id: 'a', title: 'A', status: 'todo' },
+      { id: 'b', title: 'B', status: 'todo' },
+      { id: 'c', title: 'C', status: 'doing' }
+    ]
+  };
+  const r = deleteTask(p, 'b');
+  assert.equal(r.changed, true);
+  assert.deepEqual(p.tasks.map(t => t.id), ['a', 'c'], '被删任务消失，其余任务原顺序保持');
+  assert.deepEqual(p.tasks.map(t => t.status), ['todo', 'doing'], '其余任务内容不受影响');
+});
+
+test('P4 删除任务：删除后所在状态列计数与顺序不受 order 残留影响', () => {
+  const p = {
+    tasks: [
+      { id: 'a', status: 'todo', order: 0 },
+      { id: 'b', status: 'todo', order: 1 },
+      { id: 'c', status: 'todo', order: 2 }
+    ]
+  };
+  deleteTask(p, 'b');
+  assert.deepEqual(p.tasks, [
+    { id: 'a', status: 'todo', order: 0 },
+    { id: 'c', status: 'todo', order: 2 }
+  ]);
+});
+
+test('P4 删除任务：删除不存在的任务返回 changed=false 且数组不变', () => {
+  const p = { tasks: [{ id: 'a', title: 'A', status: 'todo' }] };
+  const r = deleteTask(p, 'nope');
+  assert.equal(r.changed, false);
+  assert.equal(p.tasks.length, 1);
+  assert.equal(p.tasks[0].id, 'a');
+});
+
+test('P4 删除任务：空数组 / 无 tasks 字段 / project 为空 均安全返回 changed=false', () => {
+  assert.equal(deleteTask({ tasks: [] }, 'a').changed, false);
+  assert.equal(deleteTask({}, 'a').changed, false);
+  assert.equal(deleteTask(null, 'a').changed, false);
+  assert.equal(deleteTask(undefined, 'a').changed, false);
+});
+
+test('P4 删除任务：删除最后一个任务后数组为空', () => {
+  const p = { tasks: [{ id: 'a', title: 'A', status: 'todo' }] };
+  const r = deleteTask(p, 'a');
+  assert.equal(r.changed, true);
+  assert.deepEqual(p.tasks, []);
 });
 
 test('P4 项目排序：移动项目到指定位置', () => {

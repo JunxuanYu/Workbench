@@ -5,7 +5,7 @@ import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { openLocalPath } from '../api.js';
-import { projectCounts, todayStr, uid, moveTask, moveProject, normalizeRepoUrl, parseDocLinks, formatDocLinks, isWebLink } from '../logic.js';
+import { projectCounts, todayStr, uid, moveTask, moveProject, deleteTask, normalizeRepoUrl, parseDocLinks, formatDocLinks, isWebLink } from '../logic.js';
 
 let selectedId = null;
 const STATUSES = [
@@ -420,6 +420,26 @@ export async function render(container) {
       };
       row.append(nextBtn);
     }
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-icon';
+    delBtn.textContent = '🗑️';
+    delBtn.title = '删除任务';
+    delBtn.onclick = async e => {
+      e.stopPropagation();
+      const ok = await confirmDialog({
+        title: '删除任务',
+        message: `确定删除任务「${t.title}」吗？`,
+        okText: '删除', danger: true
+      });
+      if (!ok) return;
+      mutate(s => {
+        const p = s.projects.find(x => x.id === projId);
+        if (p) deleteTask(p, t.id);
+      });
+      toast('已删除');
+      render(ctx);
+    };
+    row.append(delBtn);
     row.onclick = () => editTaskModal(projId, t, ctx);
     return row;
   }
