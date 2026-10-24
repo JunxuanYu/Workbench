@@ -5,7 +5,19 @@ import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { dateNav } from '../components/dateNav.js';
-import { assembleToday, overdueItems, todayStr, addDays, formatPlanTime, validateTimeRange, buildPlanFromRow, parseDocLinks, formatDocLinks, isWebLink, reorderPlansBySequence } from '../logic.js';
+import {
+  assembleToday,
+  overdueItems,
+  todayStr,
+  addDays,
+  formatPlanTime,
+  validateTimeRange,
+  buildPlanFromRow,
+  parseDocLinks,
+  formatDocLinks,
+  isWebLink,
+  reorderPlansBySequence,
+} from '../logic.js';
 import { esc } from '../components/util.js';
 import { openLocalPath } from '../api.js';
 
@@ -22,10 +34,16 @@ export async function render(container) {
   sub.textContent = '安排每天要做的事；没做完的会自动顺延到新的一天，不会消失。';
   container.append(title, sub);
 
-  container.append(dateNav({
-    mode: 'day', value: viewDate,
-    onChange: v => { viewDate = v; render(container); }
-  }));
+  container.append(
+    dateNav({
+      mode: 'day',
+      value: viewDate,
+      onChange: (v) => {
+        viewDate = v;
+        render(container);
+      },
+    }),
+  );
 
   // 卡片式添加：点按钮弹出与「编辑」一致的表单卡片；「明天」标签下日期默认填次日
   const defaultDate = () => (tab === 'tomorrow' ? addDays(viewDate, 1) : viewDate);
@@ -51,52 +69,87 @@ export async function render(container) {
         { key: 'date', label: '日期', type: 'date', required: true },
         { key: 'timeStart', label: '开始时间（可选）', type: 'time' },
         { key: 'timeEnd', label: '结束时间（可选）', type: 'time' },
-        { key: 'important', label: '优先级', type: 'select', options: [{ value: '1', label: '⭐ 重要' }, { value: '0', label: '普通' }] },
+        {
+          key: 'important',
+          label: '优先级',
+          type: 'select',
+          options: [
+            { value: '1', label: '⭐ 重要' },
+            { value: '0', label: '普通' },
+          ],
+        },
         { key: 'note', label: '备注', type: 'text' },
-        { key: 'links', label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）', type: 'textarea', placeholder: '例如：\n会议纪要 | https://docs.example.com/notes\n周报模板 | D:\\资料\\周报.docx' }
+        {
+          key: 'links',
+          label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）',
+          type: 'textarea',
+          placeholder: '例如：\n会议纪要 | https://docs.example.com/notes\n周报模板 | D:\\资料\\周报.docx',
+        },
       ],
       values: { text: '', date: defaultDate(), timeStart: '', timeEnd: '', important: '0', note: '', links: '' },
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         const check = validateTimeRange(v.timeStart, v.timeEnd);
         if (!check.ok) throw new Error(check.error);
         const parsed = parseDocLinks(v.links);
         if (!parsed.ok) throw new Error(parsed.error);
-        const r = buildPlanFromRow({ text: v.text, date: v.date, timeStart: v.timeStart, timeEnd: v.timeEnd, important: v.important === '1', note: v.note });
+        const r = buildPlanFromRow({
+          text: v.text,
+          date: v.date,
+          timeStart: v.timeStart,
+          timeEnd: v.timeEnd,
+          important: v.important === '1',
+          note: v.note,
+        });
         if (!r.ok) throw new Error(r.error);
-        mutate(s => {
+        mutate((s) => {
           const d = r.item.origDate;
           if (!s.plans[d]) s.plans[d] = [];
           s.plans[d].push({ ...r.item, links: parsed.links });
         });
         toast('已添加');
         render(container);
-      }
+      },
     });
   }
 
   // 标签
   const tabs = document.createElement('div');
   tabs.className = 'tabs';
-  for (const [key, label] of [['all', '全部'], ['today', '今天'], ['tomorrow', '明天'], ['overdue', '逾期']]) {
+  for (const [key, label] of [
+    ['all', '全部'],
+    ['today', '今天'],
+    ['tomorrow', '明天'],
+    ['overdue', '逾期'],
+  ]) {
     const b = document.createElement('button');
     b.className = 'tab' + (tab === key ? ' active' : '');
     b.textContent = label;
-    b.onclick = () => { tab = key; render(container); };
+    b.onclick = () => {
+      tab = key;
+      render(container);
+    };
     tabs.append(b);
   }
   container.append(tabs);
 
   // 取当前标签的数据（带 _src 指向原存储日期，供增删改定位）
   const state = getState();
-  let items = [];
+  let items;
   if (tab === 'all') {
-    items = assembleToday(state.plans || {}, viewDate).map(it => ({ ...it, _src: it.carried ? it.origDate : viewDate }));
+    items = assembleToday(state.plans || {}, viewDate).map((it) => ({
+      ...it,
+      _src: it.carried ? it.origDate : viewDate,
+    }));
   } else if (tab === 'today') {
-    items = (state.plans[viewDate] || []).map(it => ({ ...it, carried: false, _src: viewDate }));
+    items = (state.plans[viewDate] || []).map((it) => ({ ...it, carried: false, _src: viewDate }));
   } else if (tab === 'tomorrow') {
-    items = (state.plans[addDays(viewDate, 1)] || []).map(it => ({ ...it, carried: false, _src: addDays(viewDate, 1) }));
+    items = (state.plans[addDays(viewDate, 1)] || []).map((it) => ({
+      ...it,
+      carried: false,
+      _src: addDays(viewDate, 1),
+    }));
   } else {
-    items = overdueItems(state.plans || {}, viewDate).map(it => ({ ...it, carried: true, _src: it.date }));
+    items = overdueItems(state.plans || {}, viewDate).map((it) => ({ ...it, carried: true, _src: it.date }));
   }
 
   const listEl = document.createElement('div');
@@ -104,8 +157,8 @@ export async function render(container) {
     const hint = tab === 'all' ? '今天还没有安排，写第一件事吧' : '这里还没有内容';
     listEl.append(emptyEl(hint));
   } else {
-    const pending = items.filter(i => !i.done);
-    const done = items.filter(i => i.done);
+    const pending = items.filter((i) => !i.done);
+    const done = items.filter((i) => i.done);
     for (const it of pending) listEl.append(buildRow(it, false, container));
     if (done.length) {
       const sep = document.createElement('div');
@@ -117,24 +170,25 @@ export async function render(container) {
   }
 
   // 拖拽排序：仅待完成项可拖动；放下时按新的展示顺序持久化各源日期的顺序
-  const clearDropHints = () => listEl.querySelectorAll('.row.drop-target').forEach(r => r.classList.remove('drop-target'));
-  listEl.addEventListener('dragover', e => {
+  const clearDropHints = () =>
+    listEl.querySelectorAll('.row.drop-target').forEach((r) => r.classList.remove('drop-target'));
+  listEl.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const target = e.target.closest('.row:not(.done):not(.dragging)');
     clearDropHints();
     if (target) target.classList.add('drop-target');
   });
-  listEl.addEventListener('dragleave', e => {
+  listEl.addEventListener('dragleave', (e) => {
     if (!listEl.contains(e.relatedTarget)) clearDropHints();
   });
-  listEl.addEventListener('drop', e => {
+  listEl.addEventListener('drop', (e) => {
     e.preventDefault();
     clearDropHints();
     const dragId = e.dataTransfer.getData('text/plain');
     if (!dragId) return;
     const rows = [...listEl.querySelectorAll('.row:not(.done)')];
-    const dragRow = rows.find(r => r.dataset.id === dragId);
+    const dragRow = rows.find((r) => r.dataset.id === dragId);
     if (!dragRow) return;
     const targetRow = e.target.closest('.row:not(.done)');
     // 构造去掉被拖项后的新顺序，依据光标位置插入到目标行的前/后
@@ -145,12 +199,14 @@ export async function render(container) {
     }
     let insertAt = seq.length; // 默认放到末尾
     if (targetRow && targetRow !== dragRow) {
-      const tIdx = seq.findIndex(x => x.id === targetRow.dataset.id);
+      const tIdx = seq.findIndex((x) => x.id === targetRow.dataset.id);
       const rect = targetRow.getBoundingClientRect();
       insertAt = e.clientY > rect.top + rect.offsetHeight / 2 ? tIdx + 1 : tIdx;
     }
     seq.splice(insertAt, 0, { date: dragRow.dataset.src, id: dragId });
-    mutate(s => { reorderPlansBySequence(s.plans, seq); });
+    mutate((s) => {
+      reorderPlansBySequence(s.plans, seq);
+    });
     toast('已排序');
     render(container);
   });
@@ -164,14 +220,14 @@ export async function render(container) {
     if (!isDone) {
       row.draggable = true;
       row.style.cursor = 'grab';
-      row.addEventListener('dragstart', e => {
+      row.addEventListener('dragstart', (e) => {
         e.dataTransfer.setData('text/plain', it.id);
         e.dataTransfer.effectAllowed = 'move';
         row.classList.add('dragging');
       });
       row.addEventListener('dragend', () => {
         row.classList.remove('dragging');
-        listEl.querySelectorAll('.row.drop-target').forEach(r => r.classList.remove('drop-target'));
+        listEl.querySelectorAll('.row.drop-target').forEach((r) => r.classList.remove('drop-target'));
       });
     }
 
@@ -180,9 +236,9 @@ export async function render(container) {
     cb.checked = !!it.done;
     cb.style.cssText = 'width:17px;height:17px;flex-shrink:0;cursor:pointer;';
     cb.onchange = () => {
-      mutate(s => {
+      mutate((s) => {
         const arr = s.plans[it._src] || [];
-        const item = arr.find(x => x.id === it.id);
+        const item = arr.find((x) => x.id === it.id);
         if (item) item.done = cb.checked;
       });
       toast(cb.checked ? '已完成' : '已恢复');
@@ -229,7 +285,7 @@ export async function render(container) {
       lb.className = 'badge badge-blue';
       lb.textContent = `📎 ${links.length}`;
       lb.style.cursor = 'pointer';
-      lb.title = `关联文档（点击查阅）：${links.map(l => l.title).join('、')}`;
+      lb.title = `关联文档（点击查阅）：${links.map((l) => l.title).join('、')}`;
       lb.onclick = () => openDocsViewer(it.text, links);
       row.append(lb);
     }
@@ -246,35 +302,56 @@ export async function render(container) {
     };
     actions.append(
       btnIcon(it.important ? '⭐' : '☆', '标记重要', async () => {
-        mutate(s => {
+        mutate((s) => {
           const arr = s.plans[it._src] || [];
-          const item = arr.find(x => x.id === it.id);
+          const item = arr.find((x) => x.id === it.id);
           if (item) item.important = !item.important;
         });
         toast('已更新');
         render(ctx);
       }),
       btnIcon('✏️', '编辑', async () => {
-        const res = await openForm({
+        await openForm({
           title: '编辑计划',
           fields: [
             { key: 'text', label: '内容', type: 'text', required: true },
             { key: 'date', label: '日期', type: 'date', required: true },
             { key: 'timeStart', label: '开始时间（可选）', type: 'time' },
             { key: 'timeEnd', label: '结束时间（可选）', type: 'time' },
-            { key: 'important', label: '优先级', type: 'select', options: [{ value: '1', label: '⭐ 重要' }, { value: '0', label: '普通' }] },
+            {
+              key: 'important',
+              label: '优先级',
+              type: 'select',
+              options: [
+                { value: '1', label: '⭐ 重要' },
+                { value: '0', label: '普通' },
+              ],
+            },
             { key: 'note', label: '备注', type: 'text' },
-            { key: 'links', label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）', type: 'textarea', placeholder: '例如：\n会议纪要 | https://docs.example.com/notes\n周报模板 | D:\\资料\\周报.docx' }
+            {
+              key: 'links',
+              label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）',
+              type: 'textarea',
+              placeholder: '例如：\n会议纪要 | https://docs.example.com/notes\n周报模板 | D:\\资料\\周报.docx',
+            },
           ],
-          values: { text: it.text, date: it._src, timeStart: it.timeStart || '', timeEnd: it.timeEnd || '', important: it.important ? '1' : '0', note: it.note || '', links: formatDocLinks(it.links) },
-          onSubmit: async v => {
+          values: {
+            text: it.text,
+            date: it._src,
+            timeStart: it.timeStart || '',
+            timeEnd: it.timeEnd || '',
+            important: it.important ? '1' : '0',
+            note: it.note || '',
+            links: formatDocLinks(it.links),
+          },
+          onSubmit: async (v) => {
             const check = validateTimeRange(v.timeStart, v.timeEnd);
             if (!check.ok) throw new Error(check.error);
             const parsed = parseDocLinks(v.links);
             if (!parsed.ok) throw new Error(parsed.error);
-            mutate(s => {
+            mutate((s) => {
               const arr = s.plans[it._src] || [];
-              const idx = arr.findIndex(x => x.id === it.id);
+              const idx = arr.findIndex((x) => x.id === it.id);
               if (idx === -1) return;
               const [item] = arr.splice(idx, 1);
               const newItem = {
@@ -285,7 +362,7 @@ export async function render(container) {
                 links: parsed.links,
                 origDate: v.date,
                 timeStart: v.timeStart,
-                timeEnd: v.timeEnd
+                timeEnd: v.timeEnd,
               };
               if (!s.plans[v.date]) s.plans[v.date] = [];
               s.plans[v.date].push(newItem);
@@ -293,25 +370,26 @@ export async function render(container) {
             });
             toast('已保存');
             render(ctx);
-          }
+          },
         });
       }),
       btnIcon('🗑️', '删除', async () => {
         const ok = await confirmDialog({
           title: '删除计划',
           message: `确定删除「${it.text}」吗？`,
-          okText: '删除', danger: true
+          okText: '删除',
+          danger: true,
         });
         if (!ok) return;
-        mutate(s => {
+        mutate((s) => {
           const arr = s.plans[it._src] || [];
-          const idx = arr.findIndex(x => x.id === it.id);
+          const idx = arr.findIndex((x) => x.id === it.id);
           if (idx !== -1) arr.splice(idx, 1);
           if (arr.length === 0) delete s.plans[it._src];
         });
         toast('已删除');
         render(ctx);
-      })
+      }),
     );
     row.append(actions);
     return row;
@@ -326,9 +404,10 @@ function openDocsViewer(itemText, links) {
   const rowStyle = 'text-decoration:none;color:inherit;';
   const infoStyle = 'flex:1;min-width:0;';
   const urlStyle = 'font-size:11px;color:var(--text-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-  const listHtml = links.map(l => {
-    if (isWebLink(l.url)) {
-      return `
+  const listHtml = links
+    .map((l) => {
+      if (isWebLink(l.url)) {
+        return `
     <a class="row doc-view-row" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" style="${rowStyle}">
       <div style="${infoStyle}">
         <div style="font-size:13px;font-weight:600;">🔗 ${esc(l.title)}</div>
@@ -336,8 +415,8 @@ function openDocsViewer(itemText, links) {
       </div>
       <span class="badge badge-blue">打开 ↗</span>
     </a>`;
-    }
-    return `
+      }
+      return `
     <a class="row doc-view-row doc-view-local" href="#" data-path="${esc(l.url)}" style="${rowStyle}">
       <div style="${infoStyle}">
         <div style="font-size:13px;font-weight:600;">📄 ${esc(l.title)}</div>
@@ -345,7 +424,8 @@ function openDocsViewer(itemText, links) {
       </div>
       <span class="badge badge-gray">系统打开</span>
     </a>`;
-  }).join('');
+    })
+    .join('');
   overlay.innerHTML = `
     <div class="modal">
       <div class="modal-title">📎 关联文档</div>
@@ -358,16 +438,24 @@ function openDocsViewer(itemText, links) {
       </div>
     </div>`;
   const close = () => overlay.remove();
-  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
   overlay.querySelector('[data-act="close"]').onclick = close;
   // 网页行：正常新标签跳转，不触发遮罩关闭
-  overlay.querySelectorAll('.doc-view-row:not(.doc-view-local)').forEach(a => a.addEventListener('click', e => e.stopPropagation()));
+  overlay
+    .querySelectorAll('.doc-view-row:not(.doc-view-local)')
+    .forEach((a) => a.addEventListener('click', (e) => e.stopPropagation()));
   // 本地行：调本机服务用系统默认程序打开
-  overlay.querySelectorAll('.doc-view-local').forEach(a => {
-    a.addEventListener('click', async e => {
+  overlay.querySelectorAll('.doc-view-local').forEach((a) => {
+    a.addEventListener('click', async (e) => {
       e.preventDefault();
-      try { await openLocalPath(a.dataset.path); toast('已打开'); }
-      catch (err) { toast(err.message); }
+      try {
+        await openLocalPath(a.dataset.path);
+        toast('已打开');
+      } catch (err) {
+        toast(err.message);
+      }
     });
   });
   root.appendChild(overlay);

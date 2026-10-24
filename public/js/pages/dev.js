@@ -5,13 +5,26 @@ import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { openLocalPath } from '../api.js';
-import { projectCounts, todayStr, uid, moveTask, moveProject, deleteTask, normalizeRepoUrl, parseDocLinks, formatDocLinks, isWebLink } from '../logic.js';
+import {
+  projectCounts,
+  todayStr,
+  uid,
+  moveTask,
+  moveProject,
+  deleteTask,
+  normalizeRepoUrl,
+  parseDocLinks,
+  formatDocLinks,
+  isWebLink,
+  isProjectClosed,
+  sortProjectsByStatus,
+} from '../logic.js';
 
 let selectedId = null;
 const STATUSES = [
   { key: 'todo', label: '待办' },
   { key: 'doing', label: '进行中' },
-  { key: 'done', label: '已完成' }
+  { key: 'done', label: '已完成' },
 ];
 const NEXT = { todo: 'doing', doing: 'done', done: null };
 
@@ -26,9 +39,27 @@ export async function render(container) {
   container.append(title, sub);
 
   const state = getState();
-  const projects = state.projects || [];
-  if (!projects.some(p => p.id === selectedId)) selectedId = projects[0]?.id || null;
-  const project = projects.find(p => p.id === selectedId) || null;
+  const rawProjects = state.projects || [];
+  const projects = sortProjectsByStatus(rawProjects);
+  // 同步回 state 顺序，确保排序持久化到显示顺序
+  if (rawProjects.length === projects.length) {
+    // 只有在顺序确实不同或包含已结项时才同步，避免无效重排
+    let same = true;
+    for (let i = 0; i < rawProjects.length; i++) {
+      if (rawProjects[i] !== projects[i]) {
+        same = false;
+        break;
+      }
+    }
+    if (!same) {
+      mutate((s) => {
+        s.projects = projects.map((p) => p);
+      });
+      // 重新获取引用（mutate 已直接修改 state，这里使用 projects 已是排序后的数组）
+    }
+  }
+  if (!projects.some((p) => p.id === selectedId)) selectedId = projects[0]?.id || null;
+  const project = projects.find((p) => p.id === selectedId) || null;
 
   const wrap = document.createElement('div');
   wrap.style.cssText = 'display:flex;gap:16px;align-items:flex-start;';
@@ -49,24 +80,29 @@ export async function render(container) {
   addBtn.className = 'btn btn-sm btn-primary';
   addBtn.textContent = '+ 新建';
   addBtn.onclick = async () => {
-    const res = await openForm({
+    await openForm({
       title: '新建项目',
       fields: [
         { key: 'name', label: '项目名称', type: 'text', required: true, placeholder: '例如：WorkLift' },
-        { key: 'repoUrl', label: '远程仓库链接（可选）', type: 'text', placeholder: '例如：https://github.com/user/repo' },
-        { key: 'desc', label: '一句话说明（可选）', type: 'text' }
+        {
+          key: 'repoUrl',
+          label: '远程仓库链接（可选）',
+          type: 'text',
+          placeholder: '例如：https://github.com/user/repo',
+        },
+        { key: 'desc', label: '一句话说明（可选）', type: 'text' },
       ],
-      onSubmit: async v => {
-        if (projects.some(p => p.name === v.name.trim())) throw new Error('项目名已存在');
+      onSubmit: async (v) => {
+        if (projects.some((p) => p.name === v.name.trim())) throw new Error('项目名已存在');
         const repoUrl = normalizeRepoUrl(v.repoUrl);
         if (repoUrl === null) throw new Error('远程仓库链接格式不正确');
-        mutate(s => {
+        mutate((s) => {
           s.projects.push({ id: uid('pr'), name: v.name.trim(), desc: v.desc.trim(), repoUrl, tasks: [], logs: [] });
           selectedId = s.projects[s.projects.length - 1].id;
         });
         toast('已创建');
         render(container);
-      }
+      },
     });
   };
   leftHead.append(leftTitle, addBtn);
@@ -79,19 +115,26 @@ export async function render(container) {
       const c = projectCounts(p);
       const item = document.createElement('div');
       item.className = 'row';
-      item.style.cssText = 'cursor:grab;' + (p.id === selectedId ? 'border-color:var(--accent);background:#eef1fe;' : '');
-      item.draggable = true;
+      const closed = isProjectClosed(p);
+      item.style.cssText =
+        'cursor:grab;' +
+        (p.id === selectedId ? 'border-color:var(--accent);background:#eef1fe;' : '') +
+        (closed ? ';opacity:0.5;filter:grayscale(100%);' : '');
+      item.draggable = !closed; // 已结项不可拖拽重排，始终置于底部
       item.dataset.projectId = p.id;
-      item.addEventListener('dragstart', e => {
+      item.addEventListener('dragstart', (e) => {
         e.dataTransfer.setData('text/plain', p.id);
         e.dataTransfer.effectAllowed = 'move';
         item.classList.add('dragging');
       });
       item.addEventListener('dragend', () => {
         item.classList.remove('dragging');
-        leftCard.querySelectorAll('.row').forEach(r => r.classList.remove('drop-target'));
+        leftCard.querySelectorAll('.row').forEach((r) => r.classList.remove('drop-target'));
       });
-      item.onclick = () => { selectedId = p.id; render(container); };
+      item.onclick = () => {
+        selectedId = p.id;
+        render(container);
+      };
       const name = document.createElement('div');
       name.style.cssText = 'font-weight:600;font-size:13px;';
       name.textContent = p.name;
@@ -105,23 +148,23 @@ export async function render(container) {
     }
 
     // 左栏拖拽放置目标
-    leftCard.addEventListener('dragover', e => {
+    leftCard.addEventListener('dragover', (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       const target = e.target.closest('.row');
       if (target) {
-        leftCard.querySelectorAll('.row').forEach(r => r.classList.remove('drop-target'));
+        leftCard.querySelectorAll('.row').forEach((r) => r.classList.remove('drop-target'));
         target.classList.add('drop-target');
       }
     });
-    leftCard.addEventListener('dragleave', e => {
+    leftCard.addEventListener('dragleave', (e) => {
       if (!leftCard.contains(e.relatedTarget)) {
-        leftCard.querySelectorAll('.row').forEach(r => r.classList.remove('drop-target'));
+        leftCard.querySelectorAll('.row').forEach((r) => r.classList.remove('drop-target'));
       }
     });
-    leftCard.addEventListener('drop', e => {
+    leftCard.addEventListener('drop', (e) => {
       e.preventDefault();
-      leftCard.querySelectorAll('.row').forEach(r => r.classList.remove('drop-target'));
+      leftCard.querySelectorAll('.row').forEach((r) => r.classList.remove('drop-target'));
       const id = e.dataTransfer.getData('text/plain');
       if (!id) return;
       const target = e.target.closest('.row');
@@ -131,7 +174,9 @@ export async function render(container) {
       // 计算实际插入位置：如果拖到目标下方则+1
       const rect = target.getBoundingClientRect();
       const insertIdx = e.clientY > rect.top + rect.offsetHeight / 2 ? targetIdx + 1 : targetIdx;
-      mutate(s => { moveProject(s.projects, id, insertIdx); });
+      mutate((s) => {
+        moveProject(s.projects, id, insertIdx);
+      });
       toast('已移动');
       render(container);
     });
@@ -160,14 +205,59 @@ export async function render(container) {
     const headActions = document.createElement('div');
     headActions.style.cssText = 'margin-left:auto;display:flex;gap:6px;';
     if (project.repoUrl) {
-      const repoLink = document.createElement('a');
-      repoLink.className = 'btn btn-sm';
-      repoLink.href = project.repoUrl;
-      repoLink.target = '_blank';
-      repoLink.rel = 'noopener noreferrer';
-      repoLink.textContent = '🔗 远程仓库';
-      headActions.append(repoLink);
+      // 归一化后再渲染：防止数据文件中被篡改的 javascript: 等伪协议链接成为可点击 sink
+      const repoHref = normalizeRepoUrl(project.repoUrl);
+      if (repoHref) {
+        const repoLink = document.createElement('a');
+        repoLink.className = 'btn btn-sm';
+        repoLink.href = repoHref;
+        repoLink.target = '_blank';
+        repoLink.rel = 'noopener noreferrer';
+        repoLink.textContent = '🔗 远程仓库';
+        headActions.append(repoLink);
+      }
     }
+    const isClosed = isProjectClosed(project);
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn btn-sm';
+    closeBtn.textContent = isClosed ? '取消结项' : '项目结项';
+    closeBtn.onclick = async () => {
+      if (isClosed) {
+        const ok = await confirmDialog({
+          title: '取消结项',
+          message: `确定取消项目「${project.name}」的结项状态吗？`,
+          okText: '取消结项',
+        });
+        if (!ok) return;
+        mutate((s) => {
+          const p = s.projects.find((x) => x.id === project.id);
+          if (p) {
+            delete p.closed;
+            delete p.archived;
+            if (p.status === 'closed' || p.status === 'done') p.status = 'active';
+          }
+        });
+        toast('已取消结项');
+        render(container);
+        return;
+      }
+      const ok = await confirmDialog({
+        title: '项目结项',
+        message: `确定结项项目「${project.name}」吗？结项后将置于底部并显示为灰度。`,
+        okText: '结项',
+        danger: true,
+      });
+      if (!ok) return;
+      mutate((s) => {
+        const p = s.projects.find((x) => x.id === project.id);
+        if (p) {
+          p.closed = true;
+          p.closedAt = new Date().toISOString();
+        }
+      });
+      toast('已结项');
+      render(container);
+    };
     const editBtn = document.createElement('button');
     editBtn.className = 'btn btn-sm';
     editBtn.textContent = '编辑项目';
@@ -176,23 +266,28 @@ export async function render(container) {
         title: '编辑项目',
         fields: [
           { key: 'name', label: '项目名称', type: 'text', required: true },
-          { key: 'repoUrl', label: '远程仓库链接（可选）', type: 'text', placeholder: '例如：https://github.com/user/repo' },
-          { key: 'desc', label: '一句话说明', type: 'text' }
+          {
+            key: 'repoUrl',
+            label: '远程仓库链接（可选）',
+            type: 'text',
+            placeholder: '例如：https://github.com/user/repo',
+          },
+          { key: 'desc', label: '一句话说明', type: 'text' },
         ],
         values: { name: project.name, desc: project.desc, repoUrl: project.repoUrl || '' },
-        onSubmit: async v => {
-          if (projects.some(p => p.id !== project.id && p.name === v.name.trim())) throw new Error('项目名已存在');
+        onSubmit: async (v) => {
+          if (projects.some((p) => p.id !== project.id && p.name === v.name.trim())) throw new Error('项目名已存在');
           const repoUrl = normalizeRepoUrl(v.repoUrl);
           if (repoUrl === null) throw new Error('远程仓库链接格式不正确');
-          mutate(s => {
-            const p = s.projects.find(x => x.id === project.id);
+          mutate((s) => {
+            const p = s.projects.find((x) => x.id === project.id);
             p.name = v.name.trim();
             p.desc = v.desc.trim();
             p.repoUrl = repoUrl;
           });
           toast('已保存');
           render(container);
-        }
+        },
       });
     };
     const delBtn = document.createElement('button');
@@ -202,15 +297,18 @@ export async function render(container) {
       const ok = await confirmDialog({
         title: '删除项目',
         message: `确定删除项目「${project.name}」吗？\n项目下的任务和工作日志将一并删除。`,
-        okText: '删除', danger: true
+        okText: '删除',
+        danger: true,
       });
       if (!ok) return;
-      mutate(s => { s.projects = s.projects.filter(x => x.id !== project.id); });
+      mutate((s) => {
+        s.projects = s.projects.filter((x) => x.id !== project.id);
+      });
       selectedId = null;
       toast('已删除');
       render(container);
     };
-    headActions.append(editBtn, delBtn);
+    headActions.append(closeBtn, editBtn, delBtn);
     headRow.append(hName, hDesc, headActions);
     head.append(headRow);
     right.append(head);
@@ -223,7 +321,8 @@ export async function render(container) {
       col.className = 'card board-col';
       col.dataset.status = st.key;
       col.style.cssText = 'padding:12px;';
-      const colTasks = (project.tasks || []).filter(t => t.status === st.key)
+      const colTasks = (project.tasks || [])
+        .filter((t) => t.status === st.key)
         .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
       const colHead = document.createElement('div');
       colHead.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
@@ -245,22 +344,22 @@ export async function render(container) {
       board.append(col);
 
       // 拖拽：列作为放置目标
-      col.addEventListener('dragover', e => {
+      col.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         col.classList.add('drop-target');
       });
-      col.addEventListener('dragleave', e => {
+      col.addEventListener('dragleave', (e) => {
         if (!col.contains(e.relatedTarget)) col.classList.remove('drop-target');
       });
-      col.addEventListener('drop', e => {
+      col.addEventListener('drop', (e) => {
         e.preventDefault();
         col.classList.remove('drop-target');
         const id = e.dataTransfer.getData('text/plain');
         if (!id) return;
         const idx = dropIndex(e, col);
-        mutate(s => {
-          const p = s.projects.find(x => x.id === project.id);
+        mutate((s) => {
+          const p = s.projects.find((x) => x.id === project.id);
           if (p) moveTask(p, id, st.key, idx);
         });
         toast('已移动');
@@ -312,11 +411,16 @@ export async function render(container) {
         del.textContent = '🗑️';
         del.title = '删除日志';
         del.onclick = async () => {
-          const ok = await confirmDialog({ title: '删除日志', message: '确定删除这条日志吗？', okText: '删除', danger: true });
+          const ok = await confirmDialog({
+            title: '删除日志',
+            message: '确定删除这条日志吗？',
+            okText: '删除',
+            danger: true,
+          });
           if (!ok) return;
-          mutate(s => {
-            const p = s.projects.find(x => x.id === project.id);
-            p.logs = p.logs.filter(x => x.id !== l.id);
+          mutate((s) => {
+            const p = s.projects.find((x) => x.id === project.id);
+            p.logs = p.logs.filter((x) => x.id !== l.id);
           });
           toast('已删除');
           render(container);
@@ -334,7 +438,7 @@ export async function render(container) {
   // 计算放置位置：落在某张任务卡的上半部分则插到它前面，否则插到后面
   function dropIndex(e, col) {
     const rows = [...col.querySelectorAll('.task-row')];
-    const at = rows.find(r => e.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2);
+    const at = rows.find((r) => e.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2);
     return at ? rows.indexOf(at) : rows.length;
   }
 
@@ -343,14 +447,14 @@ export async function render(container) {
     row.className = 'row task-row';
     row.style.cssText = 'cursor:grab;flex-wrap:wrap;';
     row.draggable = true;
-    row.addEventListener('dragstart', e => {
+    row.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', t.id);
       e.dataTransfer.effectAllowed = 'move';
       row.classList.add('dragging');
     });
     row.addEventListener('dragend', () => {
       row.classList.remove('dragging');
-      ctx.querySelectorAll('.board-col').forEach(c => c.classList.remove('drop-target'));
+      ctx.querySelectorAll('.board-col').forEach((c) => c.classList.remove('drop-target'));
     });
     const inner = document.createElement('div');
     inner.style.cssText = 'flex:1;min-width:0;';
@@ -371,7 +475,8 @@ export async function render(container) {
       for (const l of links) {
         const el = document.createElement('a');
         el.className = 'badge badge-blue';
-        el.style.cssText = 'text-decoration:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        el.style.cssText =
+          'text-decoration:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
         if (isWebLink(l.url)) {
           // 网页链接：新标签页直接打开
           el.href = l.url;
@@ -379,17 +484,21 @@ export async function render(container) {
           el.rel = 'noopener noreferrer';
           el.textContent = `🔗 ${l.title}`;
           el.title = `${l.title}\n${l.url}`;
-          el.onclick = e => e.stopPropagation(); // 只打开文档，不触发任务编辑弹窗
+          el.onclick = (e) => e.stopPropagation(); // 只打开文档，不触发任务编辑弹窗
         } else {
           // 本地文件/文件夹：由本机服务调系统默认程序打开（浏览器禁止 http 页面跳 file://）
           el.href = '#';
           el.textContent = `📄 ${l.title}`;
           el.title = `${l.title}\n${l.url}\n（点击用系统默认程序打开）`;
-          el.onclick = async e => {
+          el.onclick = async (e) => {
             e.preventDefault();
             e.stopPropagation();
-            try { await openLocalPath(l.url); toast('已打开'); }
-            catch (err) { toast(err.message); }
+            try {
+              await openLocalPath(l.url);
+              toast('已打开');
+            } catch (err) {
+              toast(err.message);
+            }
           };
         }
         linksEl.append(el);
@@ -407,12 +516,12 @@ export async function render(container) {
       const nextBtn = document.createElement('button');
       nextBtn.className = 'btn btn-sm';
       nextBtn.textContent = '→';
-      nextBtn.title = `移到「${STATUSES.find(s => s.key === NEXT[t.status]).label}」`;
-      nextBtn.onclick = e => {
+      nextBtn.title = `移到「${STATUSES.find((s) => s.key === NEXT[t.status]).label}」`;
+      nextBtn.onclick = (e) => {
         e.stopPropagation();
-        mutate(s => {
-          const p = s.projects.find(x => x.id === projId);
-          const task = (p.tasks || []).find(x => x.id === t.id);
+        mutate((s) => {
+          const p = s.projects.find((x) => x.id === projId);
+          const task = (p.tasks || []).find((x) => x.id === t.id);
           if (task) task.status = NEXT[t.status];
         });
         toast('已移动');
@@ -424,16 +533,17 @@ export async function render(container) {
     delBtn.className = 'btn-icon';
     delBtn.textContent = '🗑️';
     delBtn.title = '删除任务';
-    delBtn.onclick = async e => {
+    delBtn.onclick = async (e) => {
       e.stopPropagation();
       const ok = await confirmDialog({
         title: '删除任务',
         message: `确定删除任务「${t.title}」吗？`,
-        okText: '删除', danger: true
+        okText: '删除',
+        danger: true,
       });
       if (!ok) return;
-      mutate(s => {
-        const p = s.projects.find(x => x.id === projId);
+      mutate((s) => {
+        const p = s.projects.find((x) => x.id === projId);
         if (p) deleteTask(p, t.id);
       });
       toast('已删除');
@@ -446,25 +556,45 @@ export async function render(container) {
 
   function addTaskModal(projId, status, ctx) {
     openForm({
-      title: `在「${STATUSES.find(s => s.key === status).label}」加任务`,
+      title: `在「${STATUSES.find((s) => s.key === status).label}」加任务`,
       fields: [
         { key: 'title', label: '任务标题', type: 'text', required: true },
-        { key: 'priority', label: '优先级', type: 'select', options: [{ value: 'normal', label: '普通' }, { value: 'important', label: '⭐ 重要' }] },
+        {
+          key: 'priority',
+          label: '优先级',
+          type: 'select',
+          options: [
+            { value: 'normal', label: '普通' },
+            { value: 'important', label: '⭐ 重要' },
+          ],
+        },
         { key: 'note', label: '备注（可选）', type: 'text' },
-        { key: 'links', label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）', type: 'textarea', placeholder: '例如：\nPRD | https://github.com/user/repo/blob/main/PRD.md\n需求文档 | D:\\资料\\需求.docx' }
+        {
+          key: 'links',
+          label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）',
+          type: 'textarea',
+          placeholder: '例如：\nPRD | https://github.com/user/repo/blob/main/PRD.md\n需求文档 | D:\\资料\\需求.docx',
+        },
       ],
       values: { priority: 'normal' },
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         const parsed = parseDocLinks(v.links);
         if (!parsed.ok) throw new Error(parsed.error);
-        mutate(s => {
-          const p = s.projects.find(x => x.id === projId);
+        mutate((s) => {
+          const p = s.projects.find((x) => x.id === projId);
           if (!p.tasks) p.tasks = [];
-          p.tasks.push({ id: uid('t'), title: v.title.trim(), status, priority: v.priority, note: v.note.trim(), links: parsed.links });
+          p.tasks.push({
+            id: uid('t'),
+            title: v.title.trim(),
+            status,
+            priority: v.priority,
+            note: v.note.trim(),
+            links: parsed.links,
+          });
         });
         toast('已添加');
         render(ctx);
-      }
+      },
     });
   }
 
@@ -473,23 +603,53 @@ export async function render(container) {
       title: '编辑任务',
       fields: [
         { key: 'title', label: '任务标题', type: 'text', required: true },
-        { key: 'status', label: '状态', type: 'select', options: STATUSES.map(s => ({ value: s.key, label: s.label })) },
-        { key: 'priority', label: '优先级', type: 'select', options: [{ value: 'normal', label: '普通' }, { value: 'important', label: '⭐ 重要' }] },
+        {
+          key: 'status',
+          label: '状态',
+          type: 'select',
+          options: STATUSES.map((s) => ({ value: s.key, label: s.label })),
+        },
+        {
+          key: 'priority',
+          label: '优先级',
+          type: 'select',
+          options: [
+            { value: 'normal', label: '普通' },
+            { value: 'important', label: '⭐ 重要' },
+          ],
+        },
         { key: 'note', label: '备注', type: 'text' },
-        { key: 'links', label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）', type: 'textarea', placeholder: '例如：\nPRD | https://github.com/user/repo/blob/main/PRD.md\n需求文档 | D:\\资料\\需求.docx' }
+        {
+          key: 'links',
+          label: '关联文档（每行一条：链接 或 标题|链接，支持本地路径）',
+          type: 'textarea',
+          placeholder: '例如：\nPRD | https://github.com/user/repo/blob/main/PRD.md\n需求文档 | D:\\资料\\需求.docx',
+        },
       ],
-      values: { title: t.title, status: t.status, priority: t.priority || 'normal', note: t.note || '', links: formatDocLinks(t.links) },
-      onSubmit: async v => {
+      values: {
+        title: t.title,
+        status: t.status,
+        priority: t.priority || 'normal',
+        note: t.note || '',
+        links: formatDocLinks(t.links),
+      },
+      onSubmit: async (v) => {
         const parsed = parseDocLinks(v.links);
         if (!parsed.ok) throw new Error(parsed.error);
-        mutate(s => {
-          const p = s.projects.find(x => x.id === projId);
-          const task = (p.tasks || []).find(x => x.id === t.id);
-          Object.assign(task, { title: v.title.trim(), status: v.status, priority: v.priority, note: v.note.trim(), links: parsed.links });
+        mutate((s) => {
+          const p = s.projects.find((x) => x.id === projId);
+          const task = (p.tasks || []).find((x) => x.id === t.id);
+          Object.assign(task, {
+            title: v.title.trim(),
+            status: v.status,
+            priority: v.priority,
+            note: v.note.trim(),
+            links: parsed.links,
+          });
         });
         toast('已保存');
         render(ctx);
-      }
+      },
     });
   }
 
@@ -499,18 +659,18 @@ export async function render(container) {
       fields: [
         { key: 'date', label: '日期', type: 'date', required: true },
         { key: 'content', label: '干了什么', type: 'textarea', required: true, placeholder: '例如：完成了首页设计' },
-        { key: 'hours', label: '花了多久（可选）', type: 'text', placeholder: '例如：2小时' }
+        { key: 'hours', label: '花了多久（可选）', type: 'text', placeholder: '例如：2小时' },
       ],
       values: { date: todayStr() },
-      onSubmit: async v => {
-        mutate(s => {
-          const p = s.projects.find(x => x.id === projId);
+      onSubmit: async (v) => {
+        mutate((s) => {
+          const p = s.projects.find((x) => x.id === projId);
           if (!p.logs) p.logs = [];
           p.logs.push({ id: uid('l'), date: v.date, content: v.content.trim(), hours: v.hours.trim() });
         });
         toast('已记录');
         render(ctx);
-      }
+      },
     });
   }
 }

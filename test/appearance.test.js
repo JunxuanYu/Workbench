@@ -14,20 +14,24 @@ const SETTINGS_JS = readFileSync(join(__dirname, '..', 'public', 'js', 'pages', 
 
 // ---------- 问题1：页面外观选择 UI ----------
 test('外观设置：settings.js 渲染了 THEMES 中全部主题色块', () => {
+  assert.ok(SETTINGS_JS.includes('Object.entries(THEMES)'), '应遍历 THEMES 渲染主题选项');
+  assert.ok(SETTINGS_JS.includes('dataset.theme = key'), '每个主题项应写入 dataset.theme');
   for (const key of Object.keys(THEMES)) {
-    assert.ok(SETTINGS_JS.includes(`dataset.theme = key`), '主题项应写入 dataset.theme');
+    assert.ok(THEMES[key].label && THEMES[key].swatch && THEMES[key].desc, `主题 ${key} 配色定义完整`);
   }
 });
 
 test('外观设置：主题选择调用 mutate 与 applyTheme（即时生效+自动保存）', () => {
-  assert.ok(SETTINGS_JS.includes("s.settings.theme = key"), '点击后应写入 state.settings.theme');
+  assert.ok(SETTINGS_JS.includes('s.settings.theme = key'), '点击后应写入 state.settings.theme');
   assert.ok(SETTINGS_JS.includes('applyTheme(document.body, key)'), '点击后应应用主题');
-  assert.ok(SETTINGS_JS.includes("s.settings = s.settings || {}"), '应兼容 settings 缺失');
+  assert.ok(SETTINGS_JS.includes('s.settings = s.settings || {}'), '应兼容 settings 缺失');
 });
 
 test('外观设置：settings.js 已引入 THEMES 与 applyTheme', () => {
-  assert.ok(SETTINGS_JS.includes("import { THEMES, applyTheme } from '../theme.js'") ||
-          SETTINGS_JS.includes("THEMES, applyTheme"));
+  assert.ok(
+    SETTINGS_JS.includes("import { THEMES, applyTheme } from '../theme.js'") ||
+      SETTINGS_JS.includes('THEMES, applyTheme'),
+  );
 });
 
 // ---------- 问题2：左栏底部关闭按钮 ----------
@@ -49,8 +53,13 @@ test('关闭流程：用户取消 → cancelled 且不调用 shutdown/window.clo
   let closeCalled = 0;
   const r = await runCloseFlow({
     confirm: async () => false,
-    shutdown: async () => { shutdownCalled++; },
-    closeWindow: () => { closeCalled++; return true; }
+    shutdown: async () => {
+      shutdownCalled++;
+    },
+    closeWindow: () => {
+      closeCalled++;
+      return true;
+    },
   });
   assert.equal(r.status, 'cancelled');
   assert.equal(r.message, null);
@@ -63,9 +72,13 @@ test('关闭流程：确认后调用 shutdown 并 notify 成功提示', async ()
   let notified = null;
   const r = await runCloseFlow({
     confirm: async () => true,
-    shutdown: async () => { shutdownCalled++; },
+    shutdown: async () => {
+      shutdownCalled++;
+    },
     closeWindow: () => true,
-    notify: (m) => { notified = m; }
+    notify: (m) => {
+      notified = m;
+    },
   });
   assert.equal(shutdownCalled, 1);
   assert.equal(r.status, 'closed');
@@ -75,9 +88,11 @@ test('关闭流程：确认后调用 shutdown 并 notify 成功提示', async ()
 test('关闭流程：shutdown 失败且 window.close 成功 → window-closed', async () => {
   const r = await runCloseFlow({
     confirm: async () => true,
-    shutdown: async () => { throw new Error('shutdown unsupported'); },
+    shutdown: async () => {
+      throw new Error('shutdown unsupported');
+    },
     closeWindow: () => true,
-    notify: () => {}
+    notify: () => {},
   });
   assert.equal(r.status, 'window-closed');
 });
@@ -86,9 +101,13 @@ test('关闭流程：shutdown 失败且 window.close 不可用 → manual', asyn
   let notified = null;
   const r = await runCloseFlow({
     confirm: async () => true,
-    shutdown: async () => { throw new Error('shutdown unsupported'); },
+    shutdown: async () => {
+      throw new Error('shutdown unsupported');
+    },
     closeWindow: () => false,
-    notify: (m) => { notified = m; }
+    notify: (m) => {
+      notified = m;
+    },
   });
   assert.equal(r.status, 'manual');
   assert.equal(notified, MANUAL_MESSAGE);
@@ -99,28 +118,39 @@ test('关闭流程：shutdown 成功 + window 不可关 → closed-keep（服务
   const r = await runCloseFlow({
     confirm: async () => true,
     shutdown: async () => {},
-    closeWindow: () => { closeCalled++; return false; }
+    closeWindow: () => {
+      closeCalled++;
+      return false;
+    },
   });
   assert.equal(r.status, 'closed-keep');
   assert.equal(closeCalled, 1);
 });
 
 test('关闭流程：closeWorkbench 浏览器包装（shutdown 成功 + 无 window）→ closed-keep', async () => {
-  const r = await closeWorkbench({
-    confirm: async () => true,
-    flushSave: async () => {},
-    shutdown: async () => {},
-    window: null
-  }, () => {});
+  const r = await closeWorkbench(
+    {
+      confirm: async () => true,
+      flushSave: async () => {},
+      shutdown: async () => {},
+      window: null,
+    },
+    () => {},
+  );
   assert.equal(r.status, 'closed-keep');
 });
 
 test('关闭流程：closeWorkbench 浏览器包装（shutdown 失败 + 无 window 可关）→ manual', async () => {
-  const r = await closeWorkbench({
-    confirm: async () => true,
-    flushSave: async () => {},
-    shutdown: async () => { throw new Error('down'); },
-    window: null
-  }, () => {});
+  const r = await closeWorkbench(
+    {
+      confirm: async () => true,
+      flushSave: async () => {},
+      shutdown: async () => {
+        throw new Error('down');
+      },
+      window: null,
+    },
+    () => {},
+  );
   assert.equal(r.status, 'manual');
 });

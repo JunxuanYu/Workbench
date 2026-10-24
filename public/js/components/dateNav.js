@@ -18,7 +18,8 @@ export function dateNav({ mode = 'day', value, onChange }) {
     onChange(value);
   };
   label.onclick = () => {
-    if (picker.showPicker) picker.showPicker(); else picker.click();
+    if (picker.showPicker) picker.showPicker();
+    else picker.click();
   };
 
   const btn = (txt, fn) => {
@@ -36,13 +37,27 @@ export function dateNav({ mode = 'day', value, onChange }) {
   refresh();
 
   wrap.append(
-    btn('◀', () => { value = mode === 'day' ? addDays(value, -1) : addMonths(value, -1); refresh(); onChange(value); }),
+    btn('◀', () => {
+      value = mode === 'day' ? addDays(value, -1) : addMonths(value, -1);
+      refresh();
+      onChange(value);
+    }),
     label,
     picker,
-    btn('▶', () => { value = mode === 'day' ? addDays(value, 1) : addMonths(value, 1); refresh(); onChange(value); })
+    btn('▶', () => {
+      value = mode === 'day' ? addDays(value, 1) : addMonths(value, 1);
+      refresh();
+      onChange(value);
+    }),
   );
   if (mode === 'day' && value !== todayStr()) {
-    wrap.append(btn('回到今天', () => { value = todayStr(); refresh(); onChange(value); }));
+    wrap.append(
+      btn('回到今天', () => {
+        value = todayStr();
+        refresh();
+        onChange(value);
+      }),
+    );
   }
   return wrap;
 }

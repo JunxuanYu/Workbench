@@ -6,16 +6,23 @@ import { openForm } from '../components/modal.js';
 import { emptyEl } from '../components/empty.js';
 import { dateNav } from '../components/dateNav.js';
 import {
-  ledgerMonthStats, categoryRanking, categoryPercentages,
-  monthBudget, setMonthBudget, budgetStatus,
-  todayStr, monthKey, currentMonthKey, uid
+  ledgerMonthStats,
+  categoryRanking,
+  categoryPercentages,
+  monthBudget,
+  setMonthBudget,
+  budgetStatus,
+  todayStr,
+  monthKey,
+  currentMonthKey,
+  uid,
 } from '../logic.js';
 
 let viewMonth = currentMonthKey(); // YYYY-MM
 let filter = 'all'; // all | expense | income
 let filterCat = ''; // 分类名，'' 表示不限
 
-const fmt = n => (Number.isInteger(n) ? n.toLocaleString('zh-CN') : Number(n).toFixed(2));
+const fmt = (n) => (Number.isInteger(n) ? n.toLocaleString('zh-CN') : Number(n).toFixed(2));
 const DONUT_COLORS = ['#4a6cf7', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
 
 export async function render(container) {
@@ -28,10 +35,16 @@ export async function render(container) {
   sub.textContent = '记每一笔收支，月底知道钱花哪了、结余多少。';
   container.append(title, sub);
 
-  container.append(dateNav({
-    mode: 'month', value: viewMonth,
-    onChange: v => { viewMonth = v; render(container); }
-  }));
+  container.append(
+    dateNav({
+      mode: 'month',
+      value: viewMonth,
+      onChange: (v) => {
+        viewMonth = v;
+        render(container);
+      },
+    }),
+  );
 
   const state = getState();
   const ledger = state.ledger || [];
@@ -46,7 +59,7 @@ export async function render(container) {
     ['本月收入', stats.income, 'var(--green)'],
     ['本月支出', stats.expense, 'var(--orange)'],
     ['本月预算', budget, 'var(--accent)', true],
-    ['本月结余', stats.balance, 'var(--text)']
+    ['本月结余', stats.balance, 'var(--text)'],
   ]) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -105,7 +118,7 @@ export async function render(container) {
       const barWrap = document.createElement('div');
       barWrap.style.cssText = 'flex:1;height:14px;background:var(--gray-light);border-radius:7px;overflow:hidden;';
       const bar = document.createElement('div');
-      bar.style.cssText = `height:100%;width:${Math.round(r.total / max * 100)}%;background:var(--accent);border-radius:7px;`;
+      bar.style.cssText = `height:100%;width:${Math.round((r.total / max) * 100)}%;background:var(--accent);border-radius:7px;`;
       barWrap.append(bar);
       const val = document.createElement('div');
       val.style.cssText = 'font-size:12px;width:64px;flex-shrink:0;font-weight:600;';
@@ -137,7 +150,8 @@ export async function render(container) {
     budgetCard.append(emptyEl('本月未设置预算，点「设置预算」开始'));
   } else {
     const barWrap = document.createElement('div');
-    barWrap.style.cssText = 'height:16px;background:var(--gray-light);border-radius:8px;overflow:hidden;margin-bottom:8px;';
+    barWrap.style.cssText =
+      'height:16px;background:var(--gray-light);border-radius:8px;overflow:hidden;margin-bottom:8px;';
     const bar = document.createElement('div');
     bar.style.cssText = `height:100%;width:${bs.pct}%;background:${bs.over ? 'var(--red)' : 'var(--accent)'};border-radius:8px;transition:width .3s;`;
     barWrap.append(bar);
@@ -168,7 +182,8 @@ export async function render(container) {
     const pie = document.createElement('div');
     pie.style.cssText = `position:relative;width:110px;height:110px;border-radius:50%;flex-shrink:0;background:conic-gradient(${donutStops(segs)});`;
     const hole = document.createElement('div');
-    hole.style.cssText = 'position:absolute;inset:22px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-soft);text-align:center;line-height:1.3;';
+    hole.style.cssText =
+      'position:absolute;inset:22px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-soft);text-align:center;line-height:1.3;';
     hole.textContent = `本月支出\n¥${fmt(stats.expense)}`;
     pie.append(hole);
     body.append(pie);
@@ -181,7 +196,8 @@ export async function render(container) {
       const dot = document.createElement('span');
       dot.style.cssText = `width:10px;height:10px;border-radius:3px;flex-shrink:0;background:${DONUT_COLORS[i % DONUT_COLORS.length]};`;
       const name = document.createElement('span');
-      name.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-soft);';
+      name.style.cssText =
+        'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-soft);';
       name.textContent = s.name;
       const val = document.createElement('span');
       val.style.cssText = 'font-weight:600;';
@@ -198,11 +214,18 @@ export async function render(container) {
   // ---------- 筛选 + 明细 ----------
   const tabs = document.createElement('div');
   tabs.className = 'tabs';
-  for (const [key, label] of [['all', '全部'], ['expense', '支出'], ['income', '收入']]) {
+  for (const [key, label] of [
+    ['all', '全部'],
+    ['expense', '支出'],
+    ['income', '收入'],
+  ]) {
     const b = document.createElement('button');
     b.className = 'tab' + (filter === key ? ' active' : '');
     b.textContent = label;
-    b.onclick = () => { filter = key; render(container); };
+    b.onclick = () => {
+      filter = key;
+      render(container);
+    };
     tabs.append(b);
   }
   const catSel = document.createElement('select');
@@ -219,13 +242,16 @@ export async function render(container) {
     opt.selected = filterCat === c.name;
     catSel.append(opt);
   }
-  catSel.onchange = () => { filterCat = catSel.value; render(container); };
+  catSel.onchange = () => {
+    filterCat = catSel.value;
+    render(container);
+  };
   tabs.append(catSel);
   container.append(tabs);
 
-  let items = ledger.filter(e => monthKey(e.date) === viewMonth);
-  if (filter !== 'all') items = items.filter(e => e.type === filter);
-  if (filterCat) items = items.filter(e => e.category === filterCat);
+  let items = ledger.filter((e) => monthKey(e.date) === viewMonth);
+  if (filter !== 'all') items = items.filter((e) => e.type === filter);
+  if (filterCat) items = items.filter((e) => e.category === filterCat);
   items = items.slice().sort((a, b) => b.date.localeCompare(a.date));
 
   const listEl = document.createElement('div');
@@ -240,59 +266,80 @@ export async function render(container) {
   // 环形图渐变断点：按占比累加生成 conic-gradient 各段
   function donutStops(segs) {
     let acc = 0;
-    return segs.map((s, i) => {
-      const from = acc;
-      acc += s.pct;
-      return `${DONUT_COLORS[i % DONUT_COLORS.length]} ${from}% ${acc}%`;
-    }).join(',');
+    return segs
+      .map((s, i) => {
+        const from = acc;
+        acc += s.pct;
+        return `${DONUT_COLORS[i % DONUT_COLORS.length]} ${from}% ${acc}%`;
+      })
+      .join(',');
   }
 
   function budgetModal(ctx) {
     openForm({
       title: '设置本月预算',
       fields: [
-        { key: 'amount', label: '预算金额（元）', type: 'number', required: true, placeholder: '输入 0 取消本月预算' }
+        { key: 'amount', label: '预算金额（元）', type: 'number', required: true, placeholder: '输入 0 取消本月预算' },
       ],
       values: { amount: budget || '' },
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         const r = setMonthBudget(state.budgets || {}, viewMonth, v.amount);
         if (!r.ok) throw new Error(r.error);
-        mutate(s => { s.budgets = r.budgets; });
+        mutate((s) => {
+          s.budgets = r.budgets;
+        });
         toast(v.amount === 0 ? '已取消预算' : '预算已保存');
         render(ctx);
-      }
+      },
     });
   }
 
   function entryModal(entry, ctx) {
     const isExpense = (entry ? entry.type : 'expense') === 'expense';
-    const opts = cats.map(c => ({ value: c.name, label: `${c.name} (${c.kind === 'income' ? '收入' : '支出'})` }));
+    const opts = cats.map((c) => ({ value: c.name, label: `${c.name} (${c.kind === 'income' ? '收入' : '支出'})` }));
     openForm({
       title: entry ? '编辑账目' : '记一笔',
       fields: [
-        { key: 'type', label: '类型', type: 'select', options: [{ value: 'expense', label: '支出' }, { value: 'income', label: '收入' }] },
+        {
+          key: 'type',
+          label: '类型',
+          type: 'select',
+          options: [
+            { value: 'expense', label: '支出' },
+            { value: 'income', label: '收入' },
+          ],
+        },
         { key: 'amount', label: '金额（元）', type: 'number', required: true },
         { key: 'category', label: '分类', type: 'select', options: opts, required: true },
         { key: 'date', label: '日期', type: 'date', required: true },
-        { key: 'note', label: '备注', type: 'text' }
+        { key: 'note', label: '备注', type: 'text' },
       ],
       values: {
         type: entry ? entry.type : 'expense',
         amount: entry ? entry.amount : '',
-        category: entry ? entry.category : (isExpense ? (cats.find(c => c.kind !== 'income')?.name || '') : ''),
+        category: entry ? entry.category : isExpense ? cats.find((c) => c.kind !== 'income')?.name || '' : '',
         date: entry ? entry.date : todayStr(),
-        note: entry ? entry.note || '' : ''
+        note: entry ? entry.note || '' : '',
       },
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         if (!v.amount || Number(v.amount) <= 0) throw new Error('金额必须大于0');
-        const cat = cats.find(c => c.name === v.category);
+        const cat = cats.find((c) => c.name === v.category);
         const kind = cat?.kind || 'both';
-        const okKind = v.type === 'expense' ? (kind === 'expense' || kind === 'both') : (kind === 'income' || kind === 'both');
-        if (!okKind) throw new Error(v.type === 'expense' ? '该分类属于收入类，请重新选择' : '该分类属于支出类，请重新选择');
-        mutate(s => {
-          const item = { id: entry ? entry.id : uid('e'), type: v.type, amount: Number(v.amount), category: v.category, date: v.date, note: v.note.trim() };
+        const okKind =
+          v.type === 'expense' ? kind === 'expense' || kind === 'both' : kind === 'income' || kind === 'both';
+        if (!okKind)
+          throw new Error(v.type === 'expense' ? '该分类属于收入类，请重新选择' : '该分类属于支出类，请重新选择');
+        mutate((s) => {
+          const item = {
+            id: entry ? entry.id : uid('e'),
+            type: v.type,
+            amount: Number(v.amount),
+            category: v.category,
+            date: v.date,
+            note: v.note.trim(),
+          };
           if (entry) {
-            const i = s.ledger.findIndex(x => x.id === entry.id);
+            const i = s.ledger.findIndex((x) => x.id === entry.id);
             if (i !== -1) s.ledger[i] = item;
           } else {
             s.ledger.push(item);
@@ -300,7 +347,7 @@ export async function render(container) {
         });
         toast(entry ? '已保存' : '已记录');
         render(ctx);
-      }
+      },
     });
   }
 
@@ -347,10 +394,13 @@ export async function render(container) {
       const ok = await confirmDialog({
         title: '删除账目',
         message: `确定删除这笔 ¥${fmt(e.amount)} 的账目吗？`,
-        okText: '删除', danger: true
+        okText: '删除',
+        danger: true,
       });
       if (!ok) return;
-      mutate(s => { s.ledger = s.ledger.filter(x => x.id !== e.id); });
+      mutate((s) => {
+        s.ledger = s.ledger.filter((x) => x.id !== e.id);
+      });
       toast('已删除');
       render(ctx);
     };

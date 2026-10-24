@@ -1,6 +1,6 @@
-// 工作台关闭流程：纯逻辑可测（依赖注入）
+﻿// 工作台关闭流程：纯逻辑可测（依赖注入）
 // 目标：点击「关闭工作台」→ 确认 → 保存未落盘数据 → 请求本机 Node 服务关闭并退出，
-//       ​随后自动关闭当前浏览器标签页（window.close），实现「退出后自动关闭标签页」。
+// 随后自动关闭当前浏览器标签页（window.close），实现「退出后自动关闭标签页」。
 // 若服务不支持 /api/shutdown（旧实例）或请求失败，回退尝试 window.close()，最后提示手动关闭。
 
 // 默认提示文案
@@ -25,7 +25,11 @@ export async function runCloseFlow(deps) {
   if (!confirmed) return { status: 'cancelled', message: null };
 
   if (deps.flushSave) {
-    try { await deps.flushSave(); } catch { /* 保存失败不阻断关闭，服务端数据为上次已保存状态 */ }
+    try {
+      await deps.flushSave();
+    } catch {
+      /* 保存失败不阻断关闭，服务端数据为上次已保存状态 */
+    }
   }
 
   try {
@@ -33,7 +37,11 @@ export async function runCloseFlow(deps) {
     // 服务已关闭 → 自动关闭标签页
     let closedByWindow = false;
     if (typeof deps.closeWindow === 'function') {
-      try { closedByWindow = deps.closeWindow(); } catch { closedByWindow = false; }
+      try {
+        closedByWindow = deps.closeWindow();
+      } catch {
+        closedByWindow = false;
+      }
     }
     if (closedByWindow) {
       if (typeof deps.notify === 'function') deps.notify(CLOSE_MESSAGE);
@@ -46,7 +54,11 @@ export async function runCloseFlow(deps) {
     // 服务不支持/无法关闭 → 回退关闭浏览器窗口
     let closedByWindow = false;
     if (typeof deps.closeWindow === 'function') {
-      try { closedByWindow = deps.closeWindow(); } catch { closedByWindow = false; }
+      try {
+        closedByWindow = deps.closeWindow();
+      } catch {
+        closedByWindow = false;
+      }
     }
     if (closedByWindow) {
       if (typeof deps.notify === 'function') deps.notify(BLOCKED_MESSAGE);
@@ -74,6 +86,6 @@ export function closeWorkbench(impl, notify) {
     flushSave: impl.flushSave,
     shutdown: impl.shutdown,
     closeWindow,
-    notify
+    notify,
   });
 }

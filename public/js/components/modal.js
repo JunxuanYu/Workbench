@@ -2,7 +2,7 @@
 import { esc } from './util.js';
 
 export function openForm({ title, fields, values = {}, onSubmit }) {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const root = document.getElementById('modal-root');
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -33,9 +33,14 @@ export function openForm({ title, fields, values = {}, onSubmit }) {
     overlay.innerHTML = html;
 
     const errEl = overlay.querySelector('.form-error');
-    const close = val => { overlay.remove(); resolve(val); };
+    const close = (val) => {
+      overlay.remove();
+      resolve(val);
+    };
 
-    overlay.addEventListener('click', e => { if (e.target === overlay) close(false); });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(false);
+    });
     overlay.querySelector('[data-act="cancel"]').onclick = () => close(false);
     overlay.querySelector('[data-act="ok"]').onclick = async () => {
       const out = {};
