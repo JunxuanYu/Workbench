@@ -2,24 +2,52 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  THEMES, THEME_DEFAULT, THEME_VARIABLE_KEYS,
-  isThemeKey, normalizeTheme, themeVars, applyTheme
+  THEMES,
+  THEME_DEFAULT,
+  THEME_VARIABLE_KEYS,
+  isThemeKey,
+  normalizeTheme,
+  themeVars,
+  applyTheme,
 } from '../public/js/theme.js';
-import {
-  defaultData, validateData, currentTheme, setTheme, isValidTheme
-} from '../public/js/logic.js';
+import { defaultData, validateData, currentTheme, setTheme, isValidTheme } from '../public/js/logic.js';
 
 // ---------- THEMES 定义（问题1核心） ----------
-test('主题：四套预置配色齐全（白色/黄色/蓝色/奶油色）', () => {
-  assert.deepEqual(Object.keys(THEMES), ['white', 'yellow', 'blue', 'cream']);
+test('主题：十三套预置配色齐全（新增桃夭 + 基础四色 + 国风系列）', () => {
+  const expectedKeys = [
+    'peach',
+    'white',
+    'yellow',
+    'blue',
+    'cream',
+    'chineseRed',
+    'celadon',
+    'inkCharm',
+    'glazed',
+    'bamboo',
+    'lotus',
+    'jade',
+    'skyBlue',
+  ];
+  assert.deepEqual(Object.keys(THEMES), expectedKeys);
+  assert.equal(THEMES.peach.label, '桃夭');
+  assert.equal(THEMES.peach.desc, '桃之夭夭');
   assert.equal(THEMES.white.label, '白色');
   assert.equal(THEMES.yellow.label, '黄色');
   assert.equal(THEMES.blue.label, '蓝色');
   assert.equal(THEMES.cream.label, '奶油色');
+  assert.equal(THEMES.chineseRed.label, '中国红');
+  assert.equal(THEMES.celadon.label, '青瓷');
+  assert.equal(THEMES.inkCharm.label, '墨韵');
+  assert.equal(THEMES.glazed.label, '琉璃');
+  assert.equal(THEMES.bamboo.label, '竹青');
+  assert.equal(THEMES.lotus.label, '藕荷');
+  assert.equal(THEMES.jade.label, '脂玉');
+  assert.equal(THEMES.skyBlue.label, '天青');
 });
 
-test('主题：四套主题的变量键一致且包含基础变量', () => {
-  const keys = Object.values(THEMES).map(t => Object.keys(t.vars).sort().join(','));
+test('主题：十三套主题的变量键一致且包含基础变量', () => {
+  const keys = Object.values(THEMES).map((t) => Object.keys(t.vars).sort().join(','));
   const first = keys[0];
   for (const k of keys) assert.equal(k, first, '各主题变量键必须一致');
   for (const k of THEME_VARIABLE_KEYS) assert.ok(first.includes(k), `缺少变量 ${k}`);
@@ -37,9 +65,10 @@ test('主题：themeVars 返回对应主题的变量映射', () => {
   assert.notEqual(themeVars('blue')['--accent'], themeVars('yellow')['--accent']);
 });
 
-test('主题：normalizeTheme 非法键回退默认（白色）', () => {
+test('主题：normalizeTheme 非法键回退默认（桃夭）', () => {
   assert.equal(normalizeTheme('white'), 'white');
   assert.equal(normalizeTheme('whatever'), THEME_DEFAULT);
+  assert.equal(THEME_DEFAULT, 'peach');
   assert.equal(normalizeTheme(null), THEME_DEFAULT);
   assert.equal(isThemeKey('cream'), true);
   assert.equal(isThemeKey('blood-red'), false);
@@ -51,9 +80,9 @@ test('主题：applyTheme 在无 DOM 元素时静默返回规范化键（Node �
 });
 
 // ---------- 数据层：settings.theme 持久化（问题1逻辑） ----------
-test('外观：defaultData 包含 settings.theme 默认白色，且通过校验', () => {
+test('外观：defaultData 包含 settings.theme 默认桃夭，且通过校验', () => {
   const d = defaultData();
-  assert.equal(d.settings.theme, 'white');
+  assert.equal(d.settings.theme, 'peach');
   assert.deepEqual(validateData(d), { ok: true, errors: [] });
 });
 
@@ -79,7 +108,7 @@ test('外观：兼容无 settings 旧数据（缺失/非对象拒绝）', () => 
   assert.equal(validateData(d).ok, false, 'settings 非对象应拒绝');
 });
 
-test('外观：currentTheme 读取 state.settings.theme，非法回退白色', () => {
+test('外观：currentTheme 读取 state.settings.theme，非法回退桃夭', () => {
   const d = defaultData();
   d.settings.theme = 'cream';
   assert.equal(currentTheme(d), 'cream');

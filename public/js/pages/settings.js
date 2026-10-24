@@ -7,17 +7,26 @@ import { emptyEl } from '../components/empty.js';
 import { getInfo, downloadBackup } from '../api.js';
 import { defaultData, validateData, canDeleteCategory } from '../logic.js';
 import {
-  isVaultConfigured, createVault, unlockVault, sealVault,
-  validateMasterPassword, addVaultEntry, updateVaultEntry, removeVaultEntry
+  isVaultConfigured,
+  createVault,
+  unlockVault,
+  sealVault,
+  validateMasterPassword,
+  addVaultEntry,
+  updateVaultEntry,
+  removeVaultEntry,
 } from '../vault.js';
 import { THEMES, applyTheme } from '../theme.js';
+import { currentTheme } from '../logic.js';
 
 const KIND_LABEL = { expense: '支出', income: '收入', both: '通用' };
 
 // 密码箱解锁会话：明文仅存于内存，切换页面或手动锁定时清除
 let vaultSession = null;
 if (typeof window !== 'undefined') {
-  window.addEventListener('hashchange', () => { vaultSession = null; });
+  window.addEventListener('hashchange', () => {
+    vaultSession = null;
+  });
 }
 
 export async function render(container) {
@@ -41,7 +50,7 @@ export async function render(container) {
   appearTip.style.cssText = 'font-size:13px;line-height:1.8;color:var(--text-soft);margin-bottom:12px;';
   appearTip.textContent = '选择工作台整体配色，即刻生效并自动保存。';
   appearanceCard.append(appearTip);
-  const activeTheme = state.settings ? state.settings.theme : 'white';
+  const activeTheme = currentTheme(state);
   const grid = document.createElement('div');
   grid.className = 'appearance-grid';
   for (const [key, def] of Object.entries(THEMES)) {
@@ -61,7 +70,10 @@ export async function render(container) {
     desc.textContent = def.desc;
     opt.append(swatch, label, desc);
     opt.onclick = () => {
-      mutate(s => { s.settings = s.settings || {}; s.settings.theme = key; });
+      mutate((s) => {
+        s.settings = s.settings || {};
+        s.settings.theme = key;
+      });
       applyTheme(document.body, key);
       render(container);
     };
@@ -103,7 +115,8 @@ export async function render(container) {
     vaultCard.append(line);
   } else {
     const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;';
+    head.style.cssText =
+      'display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;';
     const headLeft = document.createElement('div');
     headLeft.style.cssText = 'display:flex;align-items:center;gap:8px;';
     const badge = document.createElement('span');
@@ -123,7 +136,10 @@ export async function render(container) {
     const lockBtn = document.createElement('button');
     lockBtn.className = 'btn btn-sm';
     lockBtn.textContent = '🔒 锁定';
-    lockBtn.onclick = () => { vaultSession = null; render(container); };
+    lockBtn.onclick = () => {
+      vaultSession = null;
+      render(container);
+    };
     headRight.append(addBtn, changeBtn, lockBtn);
     head.append(headLeft, headRight);
     vaultCard.append(head);
@@ -164,12 +180,8 @@ export async function render(container) {
       d.append(l, v);
       return d;
     };
-    infoWrap.append(
-      line('文件位置', info.filePath),
-      line('大小', `${sizeKB} KB`),
-      line('上次保存', saved)
-    );
-  } catch (e) {
+    infoWrap.append(line('文件位置', info.filePath), line('大小', `${sizeKB} KB`), line('上次保存', saved));
+  } catch {
     infoWrap.textContent = '读取数据信息失败';
   }
 
@@ -185,7 +197,10 @@ export async function render(container) {
   const backupBtn = document.createElement('button');
   backupBtn.className = 'btn btn-primary';
   backupBtn.textContent = '💾 一键备份';
-  backupBtn.onclick = () => { downloadBackup(); toast('备份已开始'); };
+  backupBtn.onclick = () => {
+    downloadBackup();
+    toast('备份已开始');
+  };
   opsRow.append(backupBtn);
 
   const restoreInput = document.createElement('input');
@@ -237,7 +252,8 @@ export async function render(container) {
       name.textContent = c.name;
       inner.append(name);
       const kindBadge = document.createElement('span');
-      kindBadge.className = 'badge ' + (c.kind === 'income' ? 'badge-green' : c.kind === 'both' ? 'badge-gray' : 'badge-blue');
+      kindBadge.className =
+        'badge ' + (c.kind === 'income' ? 'badge-green' : c.kind === 'both' ? 'badge-gray' : 'badge-blue');
       kindBadge.textContent = KIND_LABEL[c.kind] || c.kind;
       inner.append(kindBadge);
       if (c.builtin) {
@@ -254,10 +270,20 @@ export async function render(container) {
         delB.title = '删除分类';
         delB.onclick = async () => {
           const check = canDeleteCategory(state.categories, c.name, state.ledger || []);
-          if (!check.ok) { toast(check.error); return; }
-          const ok = await confirmDialog({ title: '删除分类', message: `确定删除分类「${c.name}」吗？`, okText: '删除', danger: true });
+          if (!check.ok) {
+            toast(check.error);
+            return;
+          }
+          const ok = await confirmDialog({
+            title: '删除分类',
+            message: `确定删除分类「${c.name}」吗？`,
+            okText: '删除',
+            danger: true,
+          });
           if (!ok) return;
-          mutate(s => { s.categories = s.categories.filter(x => x.name !== c.name); });
+          mutate((s) => {
+            s.categories = s.categories.filter((x) => x.name !== c.name);
+          });
           toast('已删除');
           render(container);
         };
@@ -273,20 +299,22 @@ export async function render(container) {
     const done = await openForm({
       title: '设置密码箱',
       fields: [
-        { key: 'pw', label: '主密码', type: 'password', required: true, placeholder: '至少 6 位' },
-        { key: 'pw2', label: '确认主密码', type: 'password', required: true }
+        { key: 'pw', label: '主密码', type: 'password', required: true, placeholder: '至少 10 位' },
+        { key: 'pw2', label: '确认主密码', type: 'password', required: true },
       ],
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         if (v.pw !== v.pw2) throw new Error('两次输入的主密码不一致');
         const ck = validateMasterPassword(v.pw);
         if (!ck.ok) throw new Error(ck.error);
         const r = await createVault(v.pw);
         if (!r.ok) throw new Error(r.error);
-        mutate(s => { s.vault = r.vault; });
+        mutate((s) => {
+          s.vault = r.vault;
+        });
         const u = await unlockVault(r.vault, v.pw);
         vaultSession = u.ok ? { entries: u.entries, password: v.pw } : null;
         toast('密码箱已创建');
-      }
+      },
     });
     if (done) render(ctx);
   }
@@ -295,12 +323,12 @@ export async function render(container) {
     const done = await openForm({
       title: '解锁密码箱',
       fields: [{ key: 'pw', label: '主密码', type: 'password', required: true }],
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         const r = await unlockVault(state.vault, v.pw);
         if (!r.ok) throw new Error(r.error);
         vaultSession = { entries: r.entries, password: v.pw };
         toast('已解锁');
-      }
+      },
     });
     if (done) render(ctx);
   }
@@ -312,17 +340,22 @@ export async function render(container) {
         { key: 'name', label: '名称', type: 'text', required: true, placeholder: '如：GitHub、Wi-Fi、银行卡' },
         { key: 'account', label: '账号', type: 'text', placeholder: '用户名 / 邮箱 / 密钥ID' },
         { key: 'secret', label: '密码 / 密钥', type: 'password', placeholder: '密钥可粘贴整段内容' },
-        { key: 'notes', label: '备注', type: 'textarea', placeholder: '可选' }
+        { key: 'notes', label: '备注', type: 'textarea', placeholder: '可选' },
       ],
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         const r = addVaultEntry(vaultSession.entries, v);
         if (!r.ok) throw new Error(r.error);
-        const sealed = await sealVault(r.entries, vaultSession.password, { salt: state.vault.salt, iterations: state.vault.iterations });
+        const sealed = await sealVault(r.entries, vaultSession.password, {
+          salt: state.vault.salt,
+          iterations: state.vault.iterations,
+        });
         if (!sealed.ok) throw new Error(sealed.error);
-        mutate(s => { s.vault = sealed.vault; });
+        mutate((s) => {
+          s.vault = sealed.vault;
+        });
         vaultSession.entries = r.entries;
         toast('已添加');
-      }
+      },
     });
     if (done) render(ctx);
   }
@@ -334,18 +367,23 @@ export async function render(container) {
         { key: 'name', label: '名称', type: 'text', required: true, placeholder: '如：GitHub、Wi-Fi、银行卡' },
         { key: 'account', label: '账号', type: 'text', placeholder: '用户名 / 邮箱 / 密钥ID' },
         { key: 'secret', label: '密码 / 密钥', type: 'password', placeholder: '密钥可粘贴整段内容' },
-        { key: 'notes', label: '备注', type: 'textarea', placeholder: '可选' }
+        { key: 'notes', label: '备注', type: 'textarea', placeholder: '可选' },
       ],
       values: { name: entry.name, account: entry.account, secret: entry.secret, notes: entry.notes },
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         const r = updateVaultEntry(vaultSession.entries, entry.id, v);
         if (!r.ok) throw new Error(r.error);
-        const sealed = await sealVault(r.entries, vaultSession.password, { salt: state.vault.salt, iterations: state.vault.iterations });
+        const sealed = await sealVault(r.entries, vaultSession.password, {
+          salt: state.vault.salt,
+          iterations: state.vault.iterations,
+        });
         if (!sealed.ok) throw new Error(sealed.error);
-        mutate(s => { s.vault = sealed.vault; });
+        mutate((s) => {
+          s.vault = sealed.vault;
+        });
         vaultSession.entries = r.entries;
         toast('已保存');
-      }
+      },
     });
     if (done) render(ctx);
   }
@@ -354,14 +392,26 @@ export async function render(container) {
     const ok = await confirmDialog({
       title: '删除条目',
       message: `确定删除「${entry.name}」吗？此操作不可撤销。`,
-      okText: '删除', danger: true
+      okText: '删除',
+      danger: true,
     });
     if (!ok) return;
     const r = removeVaultEntry(vaultSession.entries, entry.id);
-    if (!r.ok) { toast(r.error); return; }
-    const sealed = await sealVault(r.entries, vaultSession.password, { salt: state.vault.salt, iterations: state.vault.iterations });
-    if (!sealed.ok) { toast(sealed.error); return; }
-    mutate(s => { s.vault = sealed.vault; });
+    if (!r.ok) {
+      toast(r.error);
+      return;
+    }
+    const sealed = await sealVault(r.entries, vaultSession.password, {
+      salt: state.vault.salt,
+      iterations: state.vault.iterations,
+    });
+    if (!sealed.ok) {
+      toast(sealed.error);
+      return;
+    }
+    mutate((s) => {
+      s.vault = sealed.vault;
+    });
     vaultSession.entries = r.entries;
     toast('已删除');
     render(ctx);
@@ -372,10 +422,10 @@ export async function render(container) {
       title: '修改主密码',
       fields: [
         { key: 'old', label: '当前主密码', type: 'password', required: true },
-        { key: 'pw', label: '新主密码', type: 'password', required: true, placeholder: '至少 6 位' },
-        { key: 'pw2', label: '确认新主密码', type: 'password', required: true }
+        { key: 'pw', label: '新主密码', type: 'password', required: true, placeholder: '至少 10 位' },
+        { key: 'pw2', label: '确认新主密码', type: 'password', required: true },
       ],
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         if (v.pw !== v.pw2) throw new Error('两次输入的新主密码不一致');
         const ck = validateMasterPassword(v.pw);
         if (!ck.ok) throw new Error(ck.error);
@@ -383,10 +433,12 @@ export async function render(container) {
         if (!verify.ok) throw new Error('当前主密码不正确');
         const sealed = await sealVault(vaultSession.entries, v.pw, { iterations: state.vault.iterations });
         if (!sealed.ok) throw new Error(sealed.error);
-        mutate(s => { s.vault = sealed.vault; });
+        mutate((s) => {
+          s.vault = sealed.vault;
+        });
         vaultSession.password = v.pw;
         toast('主密码已修改');
-      }
+      },
     });
     if (done) render(ctx);
   }
@@ -468,22 +520,28 @@ export async function render(container) {
     let obj;
     try {
       obj = JSON.parse(await file.text());
-    } catch (e) {
+    } catch {
       toast('备份文件不是有效的 JSON');
       return;
     }
     const check = validateData(obj);
-    if (!check.ok) { toast('备份文件格式不正确：' + check.errors[0]); return; }
+    if (!check.ok) {
+      toast('备份文件格式不正确：' + check.errors[0]);
+      return;
+    }
     const ok1 = await confirmDialog({
       title: '恢复备份',
       message: '恢复将覆盖当前所有数据，且不可撤销。确定继续吗？',
-      okText: '继续', danger: true
+      okText: '继续',
+      danger: true,
     });
     if (!ok1) return;
     const ok2 = await confirmDialog({
       title: '最终确认',
       message: '请再次确认，输入「确认」两字以执行恢复。',
-      okText: '执行恢复', danger: true, requireText: '确认'
+      okText: '执行恢复',
+      danger: true,
+      requireText: '确认',
     });
     if (!ok2) return;
     replaceState(obj);
@@ -496,13 +554,16 @@ export async function render(container) {
     const ok1 = await confirmDialog({
       title: '清空全部数据',
       message: '此操作将删除全部数据且不可恢复。确定继续吗？',
-      okText: '继续', danger: true
+      okText: '继续',
+      danger: true,
     });
     if (!ok1) return;
     const ok2 = await confirmDialog({
       title: '最终确认',
       message: '请再次确认，输入「确认」两字以清空全部数据。',
-      okText: '清空', danger: true, requireText: '确认'
+      okText: '清空',
+      danger: true,
+      requireText: '确认',
     });
     if (!ok2) return;
     replaceState(defaultData());
@@ -516,21 +577,28 @@ export async function render(container) {
       title: '添加分类',
       fields: [
         { key: 'name', label: '分类名', type: 'text', required: true },
-        { key: 'kind', label: '用途', type: 'select', options: [
-          { value: 'expense', label: '支出' },
-          { value: 'income', label: '收入' },
-          { value: 'both', label: '支出与收入' }
-        ] }
+        {
+          key: 'kind',
+          label: '用途',
+          type: 'select',
+          options: [
+            { value: 'expense', label: '支出' },
+            { value: 'income', label: '收入' },
+            { value: 'both', label: '支出与收入' },
+          ],
+        },
       ],
       values: { kind: 'expense' },
-      onSubmit: async v => {
+      onSubmit: async (v) => {
         const name = String(v.name).trim();
         if (!name) throw new Error('分类名不能为空');
-        if ((state.categories || []).some(c => c.name === name)) throw new Error('分类已存在');
-        mutate(s => { s.categories.push({ name, kind: v.kind, builtin: false }); });
+        if ((state.categories || []).some((c) => c.name === name)) throw new Error('分类已存在');
+        mutate((s) => {
+          s.categories.push({ name, kind: v.kind, builtin: false });
+        });
         toast('已添加');
         render(ctx);
-      }
+      },
     });
   }
 }

@@ -22,17 +22,21 @@ async function boot() {
   const closeBtn = document.getElementById('close-workbench');
   if (closeBtn) {
     closeBtn.onclick = async () => {
-      await closeWorkbench({
-        confirm: () => confirmDialog({
-          title: '关闭工作台',
-          message: '确定要关闭 WorkLift 服务吗？会先自动保存所有数据。若需再次使用，请重新运行 start.bat。',
-          danger: true,
-          okText: '关闭服务'
-        }),
-        flushSave,
-        shutdown: shutdownServer,
-        window
-      }, toast);
+      await closeWorkbench(
+        {
+          confirm: () =>
+            confirmDialog({
+              title: '关闭工作台',
+              message: '确定要关闭 WorkLift 服务吗？会先自动保存所有数据。若需再次使用，请重新运行 start.bat。',
+              danger: true,
+              okText: '关闭服务',
+            }),
+          flushSave,
+          shutdown: shutdownServer,
+          window,
+        },
+        toast,
+      );
     };
   }
 }
