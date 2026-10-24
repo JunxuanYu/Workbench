@@ -1,9 +1,23 @@
+# dependencies and local data
 node_modules/
 data/
+python/.venv/
+
+# local tool state / caches
 .omo/
-doc/
 .codegraph/
-openspec/
-node_modules/
 .opencode/
 .playwright-mcp/
+openspec/
+doc/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# generated logs and one-off test output
+*.log
+node_test.txt
+python_test.txt
+dev-page*.yml
+python/tests/_*.pdf

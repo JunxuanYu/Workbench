@@ -1,0 +1,11 @@
+# WorkLift Python 工具链 lint 配置（ruff）
+# 覆盖 python/md_convert.py、python/pdf_convert.py
+# 规则集保守：仅默认 E4/E7/E9/F + 行宽，避免对存量代码引入破坏性样式压力
+line-length = 120
+target-version = "py310"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# CLI 入口保留「未知异常兜底」的裸 except 契约处理（已有显式注释说明）
