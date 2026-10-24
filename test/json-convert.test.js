@@ -2,9 +2,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseJsonSafe, formatJson, minifyJson, validateJson,
-  jsonToCsv, jsonToYaml, executeOperation, OPERATIONS,
-  createJsonConvertTool
+  parseJsonSafe,
+  formatJson,
+  minifyJson,
+  validateJson,
+  jsonToCsv,
+  jsonToYaml,
+  executeOperation,
+  OPERATIONS,
+  createJsonConvertTool,
 } from '../public/js/tools/json-convert.js';
 
 // ---------- parseJsonSafe ----------
@@ -178,7 +184,7 @@ test('executeOperation：未知操作抛错', () => {
 // ---------- OPERATIONS 结构 ----------
 test('OPERATIONS：包含 5 种操作', () => {
   assert.equal(OPERATIONS.length, 5);
-  const ids = OPERATIONS.map(o => o.id);
+  const ids = OPERATIONS.map((o) => o.id);
   assert.deepEqual(ids, ['format', 'minify', 'validate', 'csv', 'yaml']);
   for (const op of OPERATIONS) {
     assert.ok(op.label, `${op.id} 应有 label`);
@@ -200,7 +206,7 @@ test('createJsonConvertTool：返回正确结构', () => {
 test('工具箱：JSON 转换工具已自动注册', async () => {
   const { getTools } = await import('../public/js/pages/consult.js');
   const tools = getTools();
-  const jsonTool = tools.find(t => t.id === 'json-convert');
+  const jsonTool = tools.find((t) => t.id === 'json-convert');
   assert.ok(jsonTool, 'json-convert 应已注册');
   assert.equal(jsonTool.name, 'JSON 转换');
 });
@@ -209,7 +215,7 @@ test('工具箱：现在有 2 个工具', async () => {
   const { getTools } = await import('../public/js/pages/consult.js');
   const tools = getTools();
   assert.ok(tools.length >= 2, '应至少有 2 个工具');
-  const ids = tools.map(t => t.id);
+  const ids = tools.map((t) => t.id);
   assert.ok(ids.includes('pdf-convert'));
   assert.ok(ids.includes('json-convert'));
 });

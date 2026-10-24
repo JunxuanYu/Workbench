@@ -4,6 +4,9 @@
 //   data = base64( 12字节随机IV + AES-GCM密文 )，明文只存在于解锁后的内存中
 
 export const DEFAULT_ITERATIONS = 210000;
+// 迭代次数上限：防止被篡改/恶意构造的 vault 携带天文数字迭代次数，
+// 导致解锁时浏览器长时间卡死（PBKDF2 拒绝服务）
+export const MAX_ITERATIONS = 10_000_000;
 
 const te = new TextEncoder();
 const td = new TextDecoder();
@@ -33,7 +36,7 @@ async function deriveKey(password, salt, iterations) {
     material,
     { name: 'AES-GCM', length: 256 },
     false,
-    ['encrypt', 'decrypt']
+    ['encrypt', 'decrypt'],
   );
 }
 
@@ -59,7 +62,7 @@ async function aesGcmDecrypt(key, dataB64) {
 
 export function validateMasterPassword(pw) {
   const s = String(pw || '');
-  if (s.length < 6) return { ok: false, error: '主密码至少 6 位' };
+  if (s.length < 10) return { ok: false, error: '主密码至少 10 位' };
   return { ok: true };
 }
 
@@ -68,7 +71,8 @@ export function validateVault(vault) {
   if (vault == null) return { ok: true };
   if (typeof vault !== 'object' || Array.isArray(vault)) return { ok: false, error: 'vault 必须是对象' };
   if (typeof vault.salt !== 'string' || !vault.salt) return { ok: false, error: 'vault.salt 必须是字符串' };
-  if (!Number.isInteger(vault.iterations) || vault.iterations <= 0) return { ok: false, error: 'vault.iterations 必须是正整数' };
+  if (!Number.isInteger(vault.iterations) || vault.iterations <= 0 || vault.iterations > MAX_ITERATIONS)
+    return { ok: false, error: `vault.iterations 必须是 1 到 ${MAX_ITERATIONS} 的整数` };
   if (typeof vault.data !== 'string' || !vault.data) return { ok: false, error: 'vault.data 必须是字符串' };
   return { ok: true };
 }
@@ -142,7 +146,7 @@ export function addVaultEntry(entries, fields, now = new Date()) {
 export function updateVaultEntry(entries, id, fields, now = new Date()) {
   const ck = validateEntry(fields);
   if (!ck.ok) return ck;
-  const i = entries.findIndex(e => e.id === id);
+  const i = entries.findIndex((e) => e.id === id);
   if (i === -1) return { ok: false, error: '条目不存在' };
   const next = [...entries];
   const updated = { ...next[i], ...ck.entry, updatedAt: now.toISOString() };
@@ -151,7 +155,7 @@ export function updateVaultEntry(entries, id, fields, now = new Date()) {
 }
 
 export function removeVaultEntry(entries, id) {
-  const next = entries.filter(e => e.id !== id);
+  const next = entries.filter((e) => e.id !== id);
   if (next.length === entries.length) return { ok: false, error: '条目不存在' };
   return { ok: true, entries: next };
 }

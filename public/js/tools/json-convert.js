@@ -31,7 +31,8 @@ export function validateJson(text) {
   if (r.ok) return { valid: true, error: null, line: null, column: null };
   // 尝试从错误消息提取行列
   const m = r.error.match(/position\s+(\d+)/i);
-  let line = null, column = null;
+  let line = null,
+    column = null;
   if (m) {
     const pos = parseInt(m[1], 10);
     const upTo = text.slice(0, pos);
@@ -48,13 +49,13 @@ export function jsonToCsv(text) {
   const arr = Array.isArray(r.data) ? r.data : [r.data];
   if (arr.length === 0) return '';
   // 收集所有键
-  const keys = [...new Set(arr.flatMap(obj => Object.keys(obj || {})))];
+  const keys = [...new Set(arr.flatMap((obj) => Object.keys(obj || {})))];
   if (keys.length === 0) return '';
   // 表头
-  const rows = [keys.map(k => csvEscape(k)).join(',')];
+  const rows = [keys.map((k) => csvEscape(k)).join(',')];
   // 数据行
   for (const obj of arr) {
-    rows.push(keys.map(k => csvEscape(obj?.[k])).join(','));
+    rows.push(keys.map((k) => csvEscape(obj?.[k])).join(','));
   }
   return rows.join('\n');
 }
@@ -86,7 +87,10 @@ function valueToYaml(val, depth, ind) {
     if (val.includes('\n')) {
       const lines = val.split('\n');
       const head = lines[0];
-      const rest = lines.slice(1).map(l => ' '.repeat((depth + 1) * ind) + l).join('\n');
+      const rest = lines
+        .slice(1)
+        .map((l) => ' '.repeat((depth + 1) * ind) + l)
+        .join('\n');
       return `${yamlQuote(head)} |\n${rest}`;
     }
     if (needsQuote(val)) return yamlQuote(val);
@@ -94,36 +98,40 @@ function valueToYaml(val, depth, ind) {
   }
   if (Array.isArray(val)) {
     if (val.length === 0) return '[]';
-    return val.map(item => {
-      const inner = valueToYaml(item, depth + 1, ind);
-      if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
-        // 对象项：第一行带 "- "，后续缩进
-        const lines = inner.split('\n');
-        return `${pad}- ${lines[0].trimStart()}\n${lines.slice(1).join('\n')}`;
-      }
-      return `${pad}- ${inner}`;
-    }).join('\n');
+    return val
+      .map((item) => {
+        const inner = valueToYaml(item, depth + 1, ind);
+        if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+          // 对象项：第一行带 "- "，后续缩进
+          const lines = inner.split('\n');
+          return `${pad}- ${lines[0].trimStart()}\n${lines.slice(1).join('\n')}`;
+        }
+        return `${pad}- ${inner}`;
+      })
+      .join('\n');
   }
   if (typeof val === 'object') {
     const keys = Object.keys(val);
     if (keys.length === 0) return '{}';
-    return keys.map(k => {
-      const v = val[k];
-      const inner = valueToYaml(v, depth + 1, ind);
-      if (typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length > 0) {
-        return `${pad}${yamlKey(k)}:\n${inner}`;
-      }
-      if (Array.isArray(v) && v.length > 0) {
-        return `${pad}${yamlKey(k)}:\n${inner}`;
-      }
-      return `${pad}${yamlKey(k)}: ${inner}`;
-    }).join('\n');
+    return keys
+      .map((k) => {
+        const v = val[k];
+        const inner = valueToYaml(v, depth + 1, ind);
+        if (typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length > 0) {
+          return `${pad}${yamlKey(k)}:\n${inner}`;
+        }
+        if (Array.isArray(v) && v.length > 0) {
+          return `${pad}${yamlKey(k)}:\n${inner}`;
+        }
+        return `${pad}${yamlKey(k)}: ${inner}`;
+      })
+      .join('\n');
   }
   return String(val);
 }
 
 function yamlKey(k) {
-  if (/[:\s#\[\]{},&*?|>!'"%@`]/.test(k) || k === '') return `"${k.replace(/"/g, '\\"')}"`;
+  if (/[:\s#[]{},&*?|>!'"%@`]/.test(k) || k === '') return `"${k.replace(/"/g, '\\"')}"`;
   return k;
 }
 
@@ -134,17 +142,17 @@ function yamlQuote(s) {
 function needsQuote(s) {
   if (s === '') return true;
   if (/^(true|false|null|\d)/.test(s)) return true;
-  if (/[:\s#\[\]{},&*?|>!'"%@`]/.test(s)) return true;
+  if (/[:\s#[]{},&*?|>!'"%@`]/.test(s)) return true;
   return false;
 }
 
 // ---------- 操作定义 ----------
 export const OPERATIONS = [
-  { id: 'format', label: '格式化',   icon: '✨', description: '美化 JSON 缩进' },
-  { id: 'minify', label: '压缩',     icon: '📦', description: '压缩为单行' },
-  { id: 'validate', label: '校验',   icon: '🔍', description: '检查 JSON 语法' },
-  { id: 'csv',    label: '→ CSV',    icon: '📊', description: 'JSON 数组转 CSV 表格' },
-  { id: 'yaml',   label: '→ YAML',   icon: '📝', description: 'JSON 转 YAML 格式' }
+  { id: 'format', label: '格式化', icon: '✨', description: '美化 JSON 缩进' },
+  { id: 'minify', label: '压缩', icon: '📦', description: '压缩为单行' },
+  { id: 'validate', label: '校验', icon: '🔍', description: '检查 JSON 语法' },
+  { id: 'csv', label: '→ CSV', icon: '📊', description: 'JSON 数组转 CSV 表格' },
+  { id: 'yaml', label: '→ YAML', icon: '📝', description: 'JSON 转 YAML 格式' },
 ];
 
 // ---------- 操作执行 ----------
@@ -159,7 +167,7 @@ const OPERATORS = {
     return { success: false, message: msg };
   },
   csv: (text) => jsonToCsv(text),
-  yaml: (text) => jsonToYaml(text)
+  yaml: (text) => jsonToYaml(text),
 };
 
 export function executeOperation(opId, text) {
@@ -176,7 +184,7 @@ export function createJsonConvertTool() {
     icon: '🔧',
     render(container) {
       renderJsonConvert(container);
-    }
+    },
   };
 }
 
@@ -195,7 +203,8 @@ function renderJsonConvert(container) {
   inputLabel.textContent = '输入 JSON：';
   const inputArea = document.createElement('textarea');
   inputArea.placeholder = '在此粘贴 JSON...\n示例: [{"name":"张三","age":25},{"name":"李四","age":30}]';
-  inputArea.style.cssText = 'width:100%;height:180px;font-family:Consolas,Monaco,monospace;font-size:13px;padding:10px;border:1px solid var(--border);border-radius:8px;resize:vertical;tab-size:2;';
+  inputArea.style.cssText =
+    'width:100%;height:180px;font-family:Consolas,Monaco,monospace;font-size:13px;padding:10px;border:1px solid var(--border);border-radius:8px;resize:vertical;tab-size:2;';
   container.append(inputLabel, inputArea);
 
   // 操作按钮区
@@ -222,7 +231,8 @@ function renderJsonConvert(container) {
   outputLabel.textContent = '输出结果：';
   const outputArea = document.createElement('textarea');
   outputArea.readOnly = true;
-  outputArea.style.cssText = 'width:100%;height:220px;font-family:Consolas,Monaco,monospace;font-size:13px;padding:10px;border:1px solid var(--border);border-radius:8px;resize:vertical;background:var(--gray-light);tab-size:2;display:none;';
+  outputArea.style.cssText =
+    'width:100%;height:220px;font-family:Consolas,Monaco,monospace;font-size:13px;padding:10px;border:1px solid var(--border);border-radius:8px;resize:vertical;background:var(--gray-light);tab-size:2;display:none;';
   container.append(outputLabel, outputArea);
 
   // 下载按钮
@@ -264,7 +274,7 @@ function renderJsonConvert(container) {
       outputArea.style.display = '';
       outputArea.value = lastResult;
       dlBtn.style.display = '';
-      status.textContent = `✅ 转换完成 — ${OPERATIONS.find(o => o.id === opId).label}`;
+      status.textContent = `✅ 转换完成 — ${OPERATIONS.find((o) => o.id === opId).label}`;
       status.style.color = 'var(--green)';
     } catch (e) {
       status.textContent = `❌ ${e.message}`;
