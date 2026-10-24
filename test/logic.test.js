@@ -2,21 +2,55 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  defaultData, validateData,
-  todayStr, addDays, formatDate, weekdayOf, monthKey, addMonths,
-  weekStartOf, weekEndOf, isInRange,
-  assembleToday, overdueItems, planProgress, formatPlanTime, validateTimeRange, buildPlanFromRow,
-  projectCounts, allDevDoing, logsOnDate, moveTask, moveProject, deleteTask, reorderPlansBySequence,
-  dietProgress, daysSinceLastMeal,
-  ledgerMonthStats, expenseToday, categoryRanking, categoryPercentages,
-  monthBudget, setMonthBudget, budgetStatus,
+  defaultData,
+  validateData,
+  migrateData,
+  todayStr,
+  addDays,
+  formatDate,
+  weekdayOf,
+  monthKey,
+  addMonths,
+  weekStartOf,
+  weekEndOf,
+  isInRange,
+  assembleToday,
+  overdueItems,
+  planProgress,
+  formatPlanTime,
+  validateTimeRange,
+  buildPlanFromRow,
+  projectCounts,
+  allDevDoing,
+  logsOnDate,
+  moveTask,
+  moveProject,
+  deleteTask,
+  reorderPlansBySequence,
+  ledgerMonthStats,
+  expenseToday,
+  categoryRanking,
+  categoryPercentages,
+  monthBudget,
+  setMonthBudget,
+  budgetStatus,
   computeHomeSummary,
-  formatMemoTime, parseMemoTime, memoIsDue, sortMemos,
-  pendingPlanPreview, doingTasksPreview, mealEntriesOn, recentLedger,
-  addCategory, canDeleteCategory,
+  formatMemoTime,
+  parseMemoTime,
+  memoIsDue,
+  sortMemos,
+  pendingPlanPreview,
+  doingTasksPreview,
+  recentLedger,
+  addCategory,
+  canDeleteCategory,
   normalizeRepoUrl,
-  normalizeHttpUrl, docLinkTitle, parseDocLinks, formatDocLinks,
-  normalizeLocalPath, isWebLink, docFileTitle
+  docLinkTitle,
+  parseDocLinks,
+  formatDocLinks,
+  normalizeLocalPath,
+  isWebLink,
+  docFileTitle,
 } from '../public/js/logic.js';
 
 // ---------- 日期工具 ----------
@@ -41,7 +75,7 @@ test('日期：monthKey/addMonths 正确', () => {
 
 test('日期：周以周一开始，weekStart/End 正确', () => {
   assert.equal(weekStartOf('2026-08-12'), '2026-08-10'); // 周三 → 周一
-  assert.equal(weekEndOf('2026-08-12'), '2026-08-16');   // 周日
+  assert.equal(weekEndOf('2026-08-12'), '2026-08-16'); // 周日
   assert.equal(weekStartOf('2026-08-16'), '2026-08-10'); // 周日也归本周（周一起始）
   assert.equal(isInRange('2026-08-12', '2026-08-10', '2026-08-16'), true);
   assert.equal(isInRange('2026-08-17', '2026-08-10', '2026-08-16'), false);
@@ -52,7 +86,7 @@ test('默认数据：结构完整、分类7个且全部内置、vault 未设置'
   const d = defaultData();
   assert.deepEqual(validateData(d), { ok: true, errors: [] });
   assert.equal(d.categories.length, 7);
-  assert.ok(d.categories.every(c => c.builtin));
+  assert.ok(d.categories.every((c) => c.builtin));
   assert.equal(d.vault, null, '密码箱默认未设置');
 });
 
@@ -87,6 +121,47 @@ test('校验：budgets 为可选字段（兼容旧数据），存在时必须是
   assert.equal(validateData(d).ok, true);
 });
 
+test('数据迁移：旧数据清理 meals、补全 notes，非对象输入安全返回', () => {
+  const old = defaultData();
+  delete old.notes;
+  old.meals = { '2026-08-11': { breakfast: { food: 'x' } } };
+  const migrated = migrateData(old);
+  assert.equal('meals' in migrated, false, '已下线的饮食数据应被清理');
+  assert.deepEqual(migrated.notes, [], '旧数据应补全 notes');
+  assert.deepEqual(validateData(migrated), { ok: true, errors: [] });
+
+  const withNotes = migrateData({ notes: [{ id: 'n1', title: 'T', content: '# T' }] });
+  assert.equal(withNotes.notes.length, 1, '已有 notes 不应被重置');
+  assert.equal(migrateData(null), null);
+  assert.deepEqual(migrateData([1, 2]), [1, 2]);
+});
+
+test('数据迁移：旧数据主题非法/缺失时回退桃夭，合法主题保持不变', () => {
+  const bad = { ...defaultData(), settings: { theme: 'not-a-theme' } };
+  assert.equal(migrateData(bad).settings.theme, 'peach');
+
+  const missing = { ...defaultData() };
+  delete missing.settings;
+  assert.deepEqual(migrateData(missing).settings, { theme: 'peach' });
+
+  const nullSettings = { ...defaultData(), settings: null };
+  assert.deepEqual(migrateData(nullSettings).settings, { theme: 'peach' });
+
+  const kept = { ...defaultData(), settings: { theme: 'cream' } };
+  assert.equal(migrateData(kept).settings.theme, 'cream');
+  assert.deepEqual(validateData(migrateData(bad)), { ok: true, errors: [] });
+});
+
+test('数据校验：notes 可选（旧备份兼容），存在时必须是数组', () => {
+  const d = defaultData();
+  delete d.notes;
+  assert.equal(validateData(d).ok, true, '旧备份没有 notes 也应通过');
+  d.notes = 'oops';
+  assert.equal(validateData(d).ok, false, 'notes 非数组应拒绝');
+  d.notes = [];
+  assert.equal(validateData(d).ok, true);
+});
+
 test('todayStr 返回本地日期（非UTC）', () => {
   const d = todayStr();
   assert.match(d, /^\d{4}-\d{2}-\d{2}$/);
@@ -102,14 +177,20 @@ test('远程仓库：normalizeRepoUrl 归一化/拒绝', () => {
   assert.equal(normalizeRepoUrl('http://example.com/a/'), 'http://example.com/a');
   assert.equal(normalizeRepoUrl('not a url'), null);
   assert.equal(normalizeRepoUrl('ftp://x.com'), null);
+  assert.equal(normalizeRepoUrl('javascript:alert(1)'), null, 'javascript: 伪协议必须拒绝');
+  assert.equal(normalizeRepoUrl('javascript://x/'), null, 'javascript: 伪协议必须拒绝');
+  assert.equal(normalizeRepoUrl('data:text/html,<script>alert(1)</script>'), null, 'data: 伪协议必须拒绝');
 });
 
 // ---------- P3：今日计划 ----------
 test('P3 顺延：看今天=今天自己的+未完成的历史任务，完成的历史任务不出现', () => {
   const plans = {
     '2026-08-09': [{ id: 'a', done: true, important: false, note: '' }],
-    '2026-08-10': [{ id: 'b', done: false, important: false, note: '' }, { id: 'c', done: false, important: false, note: '' }],
-    '2026-08-11': [{ id: 'd', done: false, important: false, note: '' }]
+    '2026-08-10': [
+      { id: 'b', done: false, important: false, note: '' },
+      { id: 'c', done: false, important: false, note: '' },
+    ],
+    '2026-08-11': [{ id: 'd', done: false, important: false, note: '' }],
   };
   const items = assembleToday(plans, '2026-08-11');
   assert.equal(items.length, 3);
@@ -130,13 +211,16 @@ test('P3 顺延：origDate 缺省时回退到所在日期键', () => {
 
 test('P3 逾期：仅未完成的过期任务，且带原日期', () => {
   const plans = {
-    '2026-08-09': [{ id: 'a', done: false }, { id: 'a2', done: true }],
+    '2026-08-09': [
+      { id: 'a', done: false },
+      { id: 'a2', done: true },
+    ],
     '2026-08-10': [{ id: 'b', done: false }],
-    '2026-08-11': [{ id: 'c', done: false }]
+    '2026-08-11': [{ id: 'c', done: false }],
   };
   const items = overdueItems(plans, '2026-08-11');
-  assert.deepEqual(items.map(i => i.id).sort(), ['a', 'b']);
-  assert.equal(items.find(i => i.id === 'b').date, '2026-08-10');
+  assert.deepEqual(items.map((i) => i.id).sort(), ['a', 'b']);
+  assert.equal(items.find((i) => i.id === 'b').date, '2026-08-10');
 });
 
 test('P3 顺延：今天自己的已完成任务仍在列表中（供完成区展示）', () => {
@@ -180,20 +264,24 @@ test('P3 表格式添加：buildPlanFromRow 内容/日期必填校验', () => {
 });
 
 test('P3 表格式添加：buildPlanFromRow 复用时间段校验', () => {
-  assert.deepEqual(
-    buildPlanFromRow({ text: '开会', date: '2026-08-11', timeStart: '9:00', timeEnd: '' }),
-    { ok: false, error: '开始时间格式不正确' }
-  );
-  assert.deepEqual(
-    buildPlanFromRow({ text: '开会', date: '2026-08-11', timeStart: '10:00', timeEnd: '09:00' }),
-    { ok: false, error: '结束时间不能早于开始时间' }
-  );
+  assert.deepEqual(buildPlanFromRow({ text: '开会', date: '2026-08-11', timeStart: '9:00', timeEnd: '' }), {
+    ok: false,
+    error: '开始时间格式不正确',
+  });
+  assert.deepEqual(buildPlanFromRow({ text: '开会', date: '2026-08-11', timeStart: '10:00', timeEnd: '09:00' }), {
+    ok: false,
+    error: '结束时间不能早于开始时间',
+  });
 });
 
 test('P3 表格式添加：buildPlanFromRow 合法行构造完整计划项', () => {
   const r = buildPlanFromRow({
-    text: '  写周报  ', date: '2026-08-12',
-    timeStart: '09:00', timeEnd: '10:30', important: true, note: '  提交给领导 '
+    text: '  写周报  ',
+    date: '2026-08-12',
+    timeStart: '09:00',
+    timeEnd: '10:30',
+    important: true,
+    note: '  提交给领导 ',
   });
   assert.equal(r.ok, true);
   const it = r.item;
@@ -224,9 +312,7 @@ test('P3 表格式添加：buildPlanFromRow 缺省字段取默认值', () => {
 // ---------- P4：开发工作 ----------
 test('P4 项目任务计数：三状态分别统计', () => {
   const p = {
-    tasks: [
-      { status: 'todo' }, { status: 'todo' }, { status: 'doing' }, { status: 'done' }
-    ]
+    tasks: [{ status: 'todo' }, { status: 'todo' }, { status: 'doing' }, { status: 'done' }],
   };
   assert.deepEqual(projectCounts(p), { todo: 2, doing: 1, done: 1 });
   assert.deepEqual(projectCounts({ tasks: [] }), { todo: 0, doing: 0, done: 0 });
@@ -236,16 +322,13 @@ test('P4 全部项目进行中任务合计', () => {
   const projects = [
     { tasks: [{ status: 'doing' }, { status: 'doing' }] },
     { tasks: [{ status: 'doing' }, { status: 'done' }] },
-    { tasks: [] }
+    { tasks: [] },
   ];
   assert.equal(allDevDoing(projects), 3);
 });
 
 test('P4 今天的工作日志条数（跨项目统计）', () => {
-  const projects = [
-    { logs: [{ date: '2026-08-11' }, { date: '2026-08-10' }] },
-    { logs: [{ date: '2026-08-11' }] }
-  ];
+  const projects = [{ logs: [{ date: '2026-08-11' }, { date: '2026-08-10' }] }, { logs: [{ date: '2026-08-11' }] }];
   assert.equal(logsOnDate(projects, '2026-08-11'), 2);
   assert.equal(logsOnDate(projects, '2026-08-09'), 0);
 });
@@ -255,39 +338,59 @@ test('P4 拖拽：跨列移动并重排目标列 order', () => {
     tasks: [
       { id: 'a', title: 'A', status: 'todo' },
       { id: 'b', title: 'B', status: 'todo' },
-      { id: 'c', title: 'C', status: 'doing', order: 0 }
-    ]
+      { id: 'c', title: 'C', status: 'doing', order: 0 },
+    ],
   };
   const r = moveTask(p, 'a', 'doing', 0);
   assert.equal(r.from, 'todo');
   assert.equal(r.to, 'doing');
-  assert.equal(p.tasks.find(t => t.id === 'a').status, 'doing');
-  const doing = p.tasks.filter(t => t.status === 'doing').sort((x, y) => x.order - y.order);
-  assert.deepEqual(doing.map(t => t.id), ['a', 'c']);
-  assert.deepEqual(doing.map(t => t.order), [0, 1]);
-  const todo = p.tasks.filter(t => t.status === 'todo');
-  assert.deepEqual(todo.map(t => t.id), ['b'], '原列其余任务不受影响');
+  assert.equal(p.tasks.find((t) => t.id === 'a').status, 'doing');
+  const doing = p.tasks.filter((t) => t.status === 'doing').sort((x, y) => x.order - y.order);
+  assert.deepEqual(
+    doing.map((t) => t.id),
+    ['a', 'c'],
+  );
+  assert.deepEqual(
+    doing.map((t) => t.order),
+    [0, 1],
+  );
+  const todo = p.tasks.filter((t) => t.status === 'todo');
+  assert.deepEqual(
+    todo.map((t) => t.id),
+    ['b'],
+    '原列其余任务不受影响',
+  );
 });
 
 test('P4 拖拽：同列重排（拖到列首）', () => {
-  const p = { tasks: [
-    { id: 'a', status: 'todo', order: 0 },
-    { id: 'b', status: 'todo', order: 1 },
-    { id: 'c', status: 'todo', order: 2 }
-  ] };
+  const p = {
+    tasks: [
+      { id: 'a', status: 'todo', order: 0 },
+      { id: 'b', status: 'todo', order: 1 },
+      { id: 'c', status: 'todo', order: 2 },
+    ],
+  };
   moveTask(p, 'c', 'todo', 0);
-  const todo = p.tasks.filter(t => t.status === 'todo').sort((x, y) => x.order - y.order);
-  assert.deepEqual(todo.map(t => t.id), ['c', 'a', 'b']);
+  const todo = p.tasks.filter((t) => t.status === 'todo').sort((x, y) => x.order - y.order);
+  assert.deepEqual(
+    todo.map((t) => t.id),
+    ['c', 'a', 'b'],
+  );
 });
 
 test('P4 拖拽：目标索引越界收拢到边界', () => {
-  const p = { tasks: [
-    { id: 'a', status: 'todo', order: 0 },
-    { id: 'b', status: 'todo', order: 1 }
-  ] };
+  const p = {
+    tasks: [
+      { id: 'a', status: 'todo', order: 0 },
+      { id: 'b', status: 'todo', order: 1 },
+    ],
+  };
   moveTask(p, 'a', 'todo', 99);
-  const todo = p.tasks.filter(t => t.status === 'todo').sort((x, y) => x.order - y.order);
-  assert.deepEqual(todo.map(t => t.id), ['b', 'a']);
+  const todo = p.tasks.filter((t) => t.status === 'todo').sort((x, y) => x.order - y.order);
+  assert.deepEqual(
+    todo.map((t) => t.id),
+    ['b', 'a'],
+  );
 });
 
 test('P4 拖拽：任务不存在时不做任何修改', () => {
@@ -302,13 +405,21 @@ test('P4 删除任务：从数组中移除指定任务，其余任务保持不�
     tasks: [
       { id: 'a', title: 'A', status: 'todo' },
       { id: 'b', title: 'B', status: 'todo' },
-      { id: 'c', title: 'C', status: 'doing' }
-    ]
+      { id: 'c', title: 'C', status: 'doing' },
+    ],
   };
   const r = deleteTask(p, 'b');
   assert.equal(r.changed, true);
-  assert.deepEqual(p.tasks.map(t => t.id), ['a', 'c'], '被删任务消失，其余任务原顺序保持');
-  assert.deepEqual(p.tasks.map(t => t.status), ['todo', 'doing'], '其余任务内容不受影响');
+  assert.deepEqual(
+    p.tasks.map((t) => t.id),
+    ['a', 'c'],
+    '被删任务消失，其余任务原顺序保持',
+  );
+  assert.deepEqual(
+    p.tasks.map((t) => t.status),
+    ['todo', 'doing'],
+    '其余任务内容不受影响',
+  );
 });
 
 test('P4 删除任务：删除后所在状态列计数与顺序不受 order 残留影响', () => {
@@ -316,13 +427,13 @@ test('P4 删除任务：删除后所在状态列计数与顺序不受 order 残�
     tasks: [
       { id: 'a', status: 'todo', order: 0 },
       { id: 'b', status: 'todo', order: 1 },
-      { id: 'c', status: 'todo', order: 2 }
-    ]
+      { id: 'c', status: 'todo', order: 2 },
+    ],
   };
   deleteTask(p, 'b');
   assert.deepEqual(p.tasks, [
     { id: 'a', status: 'todo', order: 0 },
-    { id: 'c', status: 'todo', order: 2 }
+    { id: 'c', status: 'todo', order: 2 },
   ]);
 });
 
@@ -352,33 +463,47 @@ test('P4 项目排序：移动项目到指定位置', () => {
   const projects = [
     { id: 'p1', name: 'A' },
     { id: 'p2', name: 'B' },
-    { id: 'p3', name: 'C' }
+    { id: 'p3', name: 'C' },
   ];
   const r = moveProject(projects, 'p1', 2);
   assert.equal(r.changed, true);
   assert.equal(r.index, 2);
-  assert.deepEqual(projects.map(p => p.id), ['p2', 'p3', 'p1']);
+  assert.deepEqual(
+    projects.map((p) => p.id),
+    ['p2', 'p3', 'p1'],
+  );
 });
 
 test('P4 项目排序：移动项目到列首', () => {
   const projects = [
     { id: 'p1', name: 'A' },
     { id: 'p2', name: 'B' },
-    { id: 'p3', name: 'C' }
+    { id: 'p3', name: 'C' },
   ];
   moveProject(projects, 'p3', 0);
-  assert.deepEqual(projects.map(p => p.id), ['p3', 'p1', 'p2']);
+  assert.deepEqual(
+    projects.map((p) => p.id),
+    ['p3', 'p1', 'p2'],
+  );
 });
 
 test('P4 项目排序：目标索引越界收拢到边界', () => {
   const projects = [
     { id: 'p1', name: 'A' },
-    { id: 'p2', name: 'B' }
+    { id: 'p2', name: 'B' },
   ];
   moveProject(projects, 'p1', 99);
-  assert.deepEqual(projects.map(p => p.id), ['p2', 'p1'], '超出末尾应移到最后');
+  assert.deepEqual(
+    projects.map((p) => p.id),
+    ['p2', 'p1'],
+    '超出末尾应移到最后',
+  );
   moveProject(projects, 'p2', -5);
-  assert.deepEqual(projects.map(p => p.id), ['p2', 'p1'], '负数应移到最前');
+  assert.deepEqual(
+    projects.map((p) => p.id),
+    ['p2', 'p1'],
+    '负数应移到最前',
+  );
 });
 
 test('P4 项目排序：项目不存在时不做任何修改', () => {
@@ -386,7 +511,10 @@ test('P4 项目排序：项目不存在时不做任何修改', () => {
   const r = moveProject(projects, 'nope', 0);
   assert.equal(r.changed, false);
   assert.equal(r.index, -1);
-  assert.deepEqual(projects.map(p => p.id), ['p1']);
+  assert.deepEqual(
+    projects.map((p) => p.id),
+    ['p1'],
+  );
 });
 
 // ---------- P2：今日计划拖拽排序 ----------
@@ -395,17 +523,20 @@ test('P2 拖拽排序：同一天内重排多个未完成项', () => {
     '2026-08-31': [
       { id: 'p1', text: 'A', done: false },
       { id: 'p2', text: 'B', done: false },
-      { id: 'p3', text: 'C', done: false }
-    ]
+      { id: 'p3', text: 'C', done: false },
+    ],
   };
   // 把 p3 拖到最前
   const changed = reorderPlansBySequence(plans, [
     { date: '2026-08-31', id: 'p3' },
     { date: '2026-08-31', id: 'p1' },
-    { date: '2026-08-31', id: 'p2' }
+    { date: '2026-08-31', id: 'p2' },
   ]);
   assert.equal(changed, true);
-  assert.deepEqual(plans['2026-08-31'].map(p => p.id), ['p3', 'p1', 'p2']);
+  assert.deepEqual(
+    plans['2026-08-31'].map((p) => p.id),
+    ['p3', 'p1', 'p2'],
+  );
 });
 
 test('P2 拖拽排序：已完成项保持原相对顺序附在末尾', () => {
@@ -414,14 +545,14 @@ test('P2 拖拽排序：已完成项保持原相对顺序附在末尾', () => {
       { id: 'p1', text: 'A', done: false },
       { id: 'p2', text: 'B', done: false },
       { id: 'p3', text: 'C', done: true },
-      { id: 'p4', text: 'D', done: true }
-    ]
+      { id: 'p4', text: 'D', done: true },
+    ],
   };
   reorderPlansBySequence(plans, [
     { date: '2026-08-31', id: 'p2' },
-    { date: '2026-08-31', id: 'p1' }
+    { date: '2026-08-31', id: 'p1' },
   ]);
-  const ids = plans['2026-08-31'].map(p => p.id);
+  const ids = plans['2026-08-31'].map((p) => p.id);
   assert.deepEqual(ids, ['p2', 'p1', 'p3', 'p4'], '已完成项 p3/p4 保持原顺序排在末尾');
 });
 
@@ -429,33 +560,37 @@ test('P2 拖拽排序：跨日期（顺延项）也能按展示顺序持久化',
   const plans = {
     '2026-08-31': [
       { id: 't1', text: '今天任务', done: false },
-      { id: 't2', text: '今天次要', done: false }
+      { id: 't2', text: '今天次要', done: false },
     ],
-    '2026-08-30': [
-      { id: 'c1', text: '昨日顺延', done: false }
-    ]
+    '2026-08-30': [{ id: 'c1', text: '昨日顺延', done: false }],
   };
   // 拖拽：把昨日顺延 c1 拖到今天的 t2 之后
   reorderPlansBySequence(plans, [
     { date: '2026-08-31', id: 't1' },
     { date: '2026-08-31', id: 't2' },
-    { date: '2026-08-30', id: 'c1' }
+    { date: '2026-08-30', id: 'c1' },
   ]);
-  assert.deepEqual(plans['2026-08-31'].map(p => p.id), ['t1', 't2']);
-  assert.deepEqual(plans['2026-08-30'].map(p => p.id), ['c1']);
+  assert.deepEqual(
+    plans['2026-08-31'].map((p) => p.id),
+    ['t1', 't2'],
+  );
+  assert.deepEqual(
+    plans['2026-08-30'].map((p) => p.id),
+    ['c1'],
+  );
 });
 
 test('P2 拖拽排序：未变化的顺序返回 changed=false 且数组不变', () => {
   const plans = {
     '2026-08-31': [
       { id: 'p1', text: 'A', done: false },
-      { id: 'p2', text: 'B', done: false }
-    ]
+      { id: 'p2', text: 'B', done: false },
+    ],
   };
   const before = JSON.stringify(plans);
   const changed = reorderPlansBySequence(plans, [
     { date: '2026-08-31', id: 'p1' },
-    { date: '2026-08-31', id: 'p2' }
+    { date: '2026-08-31', id: 'p2' },
   ]);
   assert.equal(changed, false);
   assert.equal(JSON.stringify(plans), before);
@@ -465,16 +600,19 @@ test('P2 拖拽排序：seq 含未知 id 或非法项时安全跳过', () => {
   const plans = {
     '2026-08-31': [
       { id: 'p1', text: 'A', done: false },
-      { id: 'p2', text: 'B', done: false }
-    ]
+      { id: 'p2', text: 'B', done: false },
+    ],
   };
   reorderPlansBySequence(plans, [
     { date: '2026-08-31', id: 'ghost' },
     { date: '2026-08-31', id: 'p2' },
-    { id: 'p1' } // 缺 date，忽略
+    { id: 'p1' }, // 缺 date，忽略
   ]);
   // ghost 不存在被忽略；p1 缺 date 不参与排序，仅在 seq 之外的项按原顺序附后
-  assert.deepEqual(plans['2026-08-31'].map(p => p.id), ['p2', 'p1']);
+  assert.deepEqual(
+    plans['2026-08-31'].map((p) => p.id),
+    ['p2', 'p1'],
+  );
 });
 
 test('P2 拖拽排序：空 seq / 无对应日期 / plans 为空 均安全', () => {
@@ -484,34 +622,13 @@ test('P2 拖拽排序：空 seq / 无对应日期 / plans 为空 均安全', () 
   assert.equal(reorderPlansBySequence(null, [{ date: '2026-08-31', id: 'x' }]), false);
 });
 
-
-// ---------- P6：饮食计划 ----------
-test('P6 餐次进度：记了的实心、没记的空心、计数正确', () => {
-  const meals = {
-    '2026-08-11': { breakfast: { food: '鸡蛋' }, lunch: null, dinner: { food: '米饭', note: '少盐' }, snack: { food: '苹果' } }
-  };
-  const p = dietProgress(meals, '2026-08-11');
-  assert.deepEqual(p.dots, { breakfast: true, lunch: false, dinner: true, snack: true });
-  assert.equal(p.count, 3);
-  assert.equal(dietProgress(meals, '2026-08-10').count, 0);
-});
-
-test('P6 断档提示：距最近记录超过3天返回 true 场景', () => {
-  const meals = { '2026-08-01': { breakfast: { food: 'x' } } };
-  assert.equal(daysSinceLastMeal(meals, '2026-08-05'), 4); // 超过3天
-  assert.equal(daysSinceLastMeal(meals, '2026-08-01'), 0); // 当天有记录
-  assert.equal(daysSinceLastMeal({}, '2026-08-11'), Infinity); // 从未记录
-  const today = { '2026-08-11': { lunch: { food: 'x' } } };
-  assert.equal(daysSinceLastMeal(today, '2026-08-11'), 0);
-});
-
 // ---------- P7：账目计划 ----------
 test('P7 月度统计：收入/支出/结余 按月过滤', () => {
   const ledger = [
     { date: '2026-08-01', type: 'income', amount: 10000 },
     { date: '2026-08-15', type: 'expense', amount: 35 },
     { date: '2026-08-31', type: 'expense', amount: 65 },
-    { date: '2026-07-20', type: 'expense', amount: 999 }
+    { date: '2026-07-20', type: 'expense', amount: 999 },
   ];
   assert.deepEqual(ledgerMonthStats(ledger, '2026-08'), { income: 10000, expense: 100, balance: 9900 });
   assert.deepEqual(ledgerMonthStats(ledger, '2026-07'), { income: 0, expense: 999, balance: -999 });
@@ -523,7 +640,7 @@ test('P7 今日支出：仅当天支出类求和', () => {
     { date: '2026-08-11', type: 'expense', amount: 35 },
     { date: '2026-08-11', type: 'income', amount: 500 },
     { date: '2026-08-11', type: 'expense', amount: 15 },
-    { date: '2026-08-10', type: 'expense', amount: 100 }
+    { date: '2026-08-10', type: 'expense', amount: 100 },
   ];
   assert.equal(expenseToday(ledger, '2026-08-11'), 50);
   assert.equal(expenseToday(ledger, '2026-08-09'), 0);
@@ -535,11 +652,11 @@ test('P7 类别排行：本月支出按类求和、降序排列', () => {
     { date: '2026-08-02', type: 'expense', category: '交通', amount: 20 },
     { date: '2026-08-03', type: 'expense', category: '餐饮', amount: 50 },
     { date: '2026-08-04', type: 'income', category: '工资收入', amount: 8000 },
-    { date: '2026-07-30', type: 'expense', category: '餐饮', amount: 999 }
+    { date: '2026-07-30', type: 'expense', category: '餐饮', amount: 999 },
   ];
   assert.deepEqual(categoryRanking(ledger, '2026-08'), [
     { name: '餐饮', total: 80 },
-    { name: '交通', total: 20 }
+    { name: '交通', total: 20 },
   ]);
   assert.deepEqual(categoryRanking(ledger, '2026-07'), [{ name: '餐饮', total: 999 }]);
 });
@@ -568,10 +685,13 @@ test('P7 预算：budgetStatus 计算使用率/剩余/超支', () => {
 });
 
 test('P7 预算：categoryPercentages 支出占比总和为100', () => {
-  const ranking = [{ name: '餐饮', total: 80 }, { name: '交通', total: 20 }];
+  const ranking = [
+    { name: '餐饮', total: 80 },
+    { name: '交通', total: 20 },
+  ];
   assert.deepEqual(categoryPercentages(ranking), [
     { name: '餐饮', total: 80, pct: 80 },
-    { name: '交通', total: 20, pct: 20 }
+    { name: '交通', total: 20, pct: 20 },
   ]);
   assert.deepEqual(categoryPercentages([]), []);
 });
@@ -579,24 +699,26 @@ test('P7 预算：categoryPercentages 支出占比总和为100', () => {
 // ---------- P8：首页汇总 ----------
 test('P8 首页摘要：各模块数字聚合一致', () => {
   const state = {
-    plans: { '2026-08-10': [{ done: false, important: false, note: '' }], '2026-08-11': [{ done: true, important: false, note: '' }] },
+    plans: {
+      '2026-08-10': [{ done: false, important: false, note: '' }],
+      '2026-08-11': [{ done: true, important: false, note: '' }],
+    },
     projects: [
-      { tasks: [{ status: 'doing' }, { status: 'doing' }, { status: 'done' }], logs: [{ date: '2026-08-11' }] }
+      { tasks: [{ status: 'doing' }, { status: 'doing' }, { status: 'done' }], logs: [{ date: '2026-08-11' }] },
     ],
-    meals: { '2026-08-11': { breakfast: { food: 'x' }, lunch: null, dinner: null, snack: null } },
     ledger: [
       { date: '2026-08-11', type: 'expense', amount: 35 },
-      { date: '2026-08-05', type: 'income', amount: 8000 }
-    ]
+      { date: '2026-08-05', type: 'income', amount: 8000 },
+    ],
   };
   const s = computeHomeSummary(state, '2026-08-11');
-  assert.equal(s.planTotal, 2);          // 今天1个 + 顺延1个
+  assert.equal(s.planTotal, 2); // 今天1个 + 顺延1个
   assert.equal(s.planDone, 1);
   assert.equal(s.devDoing, 2);
   assert.equal(s.devLogsToday, 1);
-  assert.equal(s.mealsToday, 1);
+  assert.equal('mealsToday' in s, false, '饮食计划已下线，不再返回 mealsToday');
   assert.equal(s.expenseToday, 35);
-  assert.equal(s.monthBalance, 7965);    // 8000 - 35
+  assert.equal(s.monthBalance, 7965); // 8000 - 35
 });
 
 // ---------- P8：首页备忘 ----------
@@ -636,9 +758,9 @@ test('P8 备忘排序：置顶 → 提醒时间升序 → 无时间按创建倒�
     { id: 'b', pinned: true, createdAt: '2026-08-11T09:00:00Z' },
     { id: 'c', pinned: false, createdAt: '2026-08-12T08:00:00Z', date: '2026-08-13', time: '10:00' },
     { id: 'd', pinned: false, createdAt: '2026-08-10T09:00:00Z', date: '2026-08-13', time: '09:00' },
-    { id: 'e', pinned: false, createdAt: '2026-08-12T07:00:00Z' }
+    { id: 'e', pinned: false, createdAt: '2026-08-12T07:00:00Z' },
   ];
-  const ids = sortMemos(memos).map(m => m.id);
+  const ids = sortMemos(memos).map((m) => m.id);
   assert.deepEqual(ids, ['b', 'd', 'c', 'a', 'e']);
   assert.deepEqual(sortMemos([]), []);
   assert.deepEqual(sortMemos(undefined), []);
@@ -651,50 +773,51 @@ test('P8 概要：今日待办预览取前 N 条未完成（含顺延）', () =>
     '2026-08-11': [
       { id: 'b', text: '任务B', done: false, important: true, note: '' },
       { id: 'c', text: '任务C', done: true, important: false, note: '' },
-      { id: 'd', text: '任务D', done: false, important: false, note: '' }
-    ]
+      { id: 'd', text: '任务D', done: false, important: false, note: '' },
+    ],
   };
   assert.deepEqual(pendingPlanPreview(plans, '2026-08-11', 2), [
     { text: '任务B', important: true },
-    { text: '任务D', important: false }
+    { text: '任务D', important: false },
   ]);
   assert.deepEqual(pendingPlanPreview({}, '2026-08-11', 3), []);
 });
 
 test('P8 概要：进行中任务预览跨项目取前 N 条', () => {
   const projects = [
-    { name: 'A', tasks: [{ title: 'T1', status: 'doing' }, { title: 'T2', status: 'todo' }] },
-    { name: 'B', tasks: [{ title: 'T3', status: 'doing' }, { title: 'T4', status: 'doing' }] },
-    { name: 'C', tasks: [{ title: 'T5', status: 'doing' }] }
+    {
+      name: 'A',
+      tasks: [
+        { title: 'T1', status: 'doing' },
+        { title: 'T2', status: 'todo' },
+      ],
+    },
+    {
+      name: 'B',
+      tasks: [
+        { title: 'T3', status: 'doing' },
+        { title: 'T4', status: 'doing' },
+      ],
+    },
+    { name: 'C', tasks: [{ title: 'T5', status: 'doing' }] },
   ];
   assert.deepEqual(doingTasksPreview(projects, 3), [
     { project: 'A', title: 'T1' },
     { project: 'B', title: 'T3' },
-    { project: 'B', title: 'T4' }
+    { project: 'B', title: 'T4' },
   ]);
   assert.deepEqual(doingTasksPreview([], 3), []);
-});
-
-test('P8 概要：当日饮食条目按餐次顺序输出', () => {
-  const meals = { '2026-08-11': { dinner: { food: '米饭' }, breakfast: { food: '鸡蛋' }, snack: null, lunch: { food: '面' } } };
-  assert.deepEqual(mealEntriesOn(meals, '2026-08-11'), [
-    { key: 'breakfast', food: '鸡蛋' },
-    { key: 'lunch', food: '面' },
-    { key: 'dinner', food: '米饭' }
-  ]);
-  assert.deepEqual(mealEntriesOn({}, '2026-08-11'), []);
-  assert.deepEqual(mealEntriesOn(undefined, '2026-08-11'), []);
 });
 
 test('P8 概要：最近账目按日期倒序取前 N 条', () => {
   const ledger = [
     { date: '2026-08-10', category: '餐饮', type: 'expense', amount: 20 },
     { date: '2026-08-12', category: '工资', type: 'income', amount: 500 },
-    { date: '2026-08-11', category: '交通', type: 'expense', amount: 5 }
+    { date: '2026-08-11', category: '交通', type: 'expense', amount: 5 },
   ];
   assert.deepEqual(recentLedger(ledger, 2), [
     { date: '2026-08-12', category: '工资', type: 'income', amount: 500 },
-    { date: '2026-08-11', category: '交通', type: 'expense', amount: 5 }
+    { date: '2026-08-11', category: '交通', type: 'expense', amount: 5 },
   ]);
   assert.deepEqual(recentLedger([], 3), []);
 });
@@ -713,7 +836,7 @@ test('P9 添加分类：重名拒绝、空名拒绝、成功追加', () => {
 test('P9 删除分类：默认分类不可删、被使用的自定义分类不可删、空闲自定义可删', () => {
   const cats = [
     { name: '餐饮', kind: 'expense', builtin: true },
-    { name: '宠物', kind: 'expense', builtin: false }
+    { name: '宠物', kind: 'expense', builtin: false },
   ];
   const ledger = [{ category: '宠物', amount: 10 }];
   assert.equal(canDeleteCategory(cats, '餐饮', ledger).ok, false);
@@ -730,7 +853,7 @@ test('P10 关联文档：parseDocLinks 解析纯链接/标题|链接/空行混�
   assert.equal(r.ok, true);
   assert.deepEqual(r.links, [
     { title: 'repo', url: 'https://github.com/user/repo' },
-    { title: '需求文档', url: 'https://example.com/prd' }
+    { title: '需求文档', url: 'https://example.com/prd' },
   ]);
 });
 
@@ -752,7 +875,7 @@ test('P10 关联文档：formatDocLinks 序列化且与 parse 往返一致', () 
   assert.equal(formatDocLinks(undefined), '');
   const links = [
     { title: 'PRD', url: 'https://example.com/prd' },
-    { title: '', url: 'https://github.com/u/r' }
+    { title: '', url: 'https://github.com/u/r' },
   ];
   assert.equal(formatDocLinks(links), 'PRD|https://example.com/prd\nhttps://github.com/u/r');
   const r = parseDocLinks(formatDocLinks([{ title: 'PRD', url: 'https://example.com/prd' }]));
@@ -768,9 +891,21 @@ test('P10 关联文档：docLinkTitle 从路径段/主机名推导默认标题',
 test('P10 数据兼容：项目任务带 links 数组可通过 validateData（服务端不拒绝新字段）', () => {
   const d = defaultData();
   d.projects.push({
-    id: 'p1', name: 'X', desc: '', repoUrl: '',
-    tasks: [{ id: 't1', title: '任务A', status: 'todo', priority: 'normal', note: '', links: [{ title: 'PRD', url: 'https://example.com/prd' }] }],
-    logs: []
+    id: 'p1',
+    name: 'X',
+    desc: '',
+    repoUrl: '',
+    tasks: [
+      {
+        id: 't1',
+        title: '任务A',
+        status: 'todo',
+        priority: 'normal',
+        note: '',
+        links: [{ title: 'PRD', url: 'https://example.com/prd' }],
+      },
+    ],
+    logs: [],
   });
   assert.deepEqual(validateData(d), { ok: true, errors: [] });
 });
@@ -778,8 +913,18 @@ test('P10 数据兼容：项目任务带 links 数组可通过 validateData（�
 test('P10 数据兼容：今日计划项带 links 数组可通过 validateData（服务端不拒绝新字段）', () => {
   const d = defaultData();
   d.plans['2026-08-23'] = [
-    { id: 'pl1', text: '写周报', done: false, important: false, note: '', origDate: '2026-08-23',
-      links: [{ title: '会议纪要', url: 'https://docs.example.com/notes' }, { title: '周报模板', url: 'https://example.com/tpl' }] }
+    {
+      id: 'pl1',
+      text: '写周报',
+      done: false,
+      important: false,
+      note: '',
+      origDate: '2026-08-23',
+      links: [
+        { title: '会议纪要', url: 'https://docs.example.com/notes' },
+        { title: '周报模板', url: 'https://example.com/tpl' },
+      ],
+    },
   ];
   assert.deepEqual(validateData(d), { ok: true, errors: [] });
   // 旧数据无 links 字段依旧通过
@@ -793,7 +938,7 @@ test('P10 关联文档：Windows CRLF 换行可正常解析（textarea 常见输
   assert.equal(r.ok, true);
   assert.deepEqual(r.links, [
     { title: '需求', url: 'https://a.com/x' },
-    { title: 'y', url: 'https://b.com/y' }
+    { title: 'y', url: 'https://b.com/y' },
   ]);
 });
 
@@ -803,7 +948,11 @@ test('P11 本地路径：normalizeLocalPath 识别盘符/UNC/POSIX、去引号�
   assert.equal(normalizeLocalPath('   '), '');
   assert.equal(normalizeLocalPath('C:\\docs\\PRD.md'), 'C:\\docs\\PRD.md');
   assert.equal(normalizeLocalPath('C:/docs/PRD.md'), 'C:/docs/PRD.md');
-  assert.equal(normalizeLocalPath('"D:\\path with space\\a.md"'), 'D:\\path with space\\a.md', '去掉复制文件地址带的引号');
+  assert.equal(
+    normalizeLocalPath('"D:\\path with space\\a.md"'),
+    'D:\\path with space\\a.md',
+    '去掉复制文件地址带的引号',
+  );
   assert.equal(normalizeLocalPath("'E:\\x.txt'"), 'E:\\x.txt');
   assert.equal(normalizeLocalPath('\\\\server\\share\\docs'), '\\\\server\\share\\docs');
   assert.equal(normalizeLocalPath('/home/user/readme.md'), '/home/user/readme.md');
@@ -818,7 +967,7 @@ test('P11 本地路径：parseDocLinks 混合解析本地与网页、默认取�
   assert.deepEqual(r.links, [
     { title: '需求文档', url: 'D:\\资料\\需求.docx' },
     { title: 'r', url: 'https://github.com/u/r' },
-    { title: '2026-08-周会.docx', url: 'C:\\会议纪要\\2026-08-周会.docx' }
+    { title: '2026-08-周会.docx', url: 'C:\\会议纪要\\2026-08-周会.docx' },
   ]);
 });
 
@@ -842,10 +991,13 @@ test('P11 本地路径：isWebLink 区分网页与本地；docFileTitle 取末�
 });
 
 test('P11 本地路径：format → parse 往返保留本地路径，空标题由文件名推导', () => {
-  const src = [{ title: 'PRD', url: 'D:\\docs\\PRD.md' }, { title: '', url: 'C:\\a.md' }];
+  const src = [
+    { title: 'PRD', url: 'D:\\docs\\PRD.md' },
+    { title: '', url: 'C:\\a.md' },
+  ];
   const r = parseDocLinks(formatDocLinks(src));
   assert.deepEqual(r.links, [
     { title: 'PRD', url: 'D:\\docs\\PRD.md' },
-    { title: 'a.md', url: 'C:\\a.md' }
+    { title: 'a.md', url: 'C:\\a.md' },
   ]);
 });

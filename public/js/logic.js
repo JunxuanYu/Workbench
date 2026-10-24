@@ -3,13 +3,17 @@
 import { validateVault } from './vault.js';
 import { isThemeKey, normalizeTheme, THEME_DEFAULT } from './theme.js';
 
-export function pad2(n) { return String(n).padStart(2, '0'); }
+export function pad2(n) {
+  return String(n).padStart(2, '0');
+}
 
 export function dateStrFrom(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-export function todayStr(now = new Date()) { return dateStrFrom(now); }
+export function todayStr(now = new Date()) {
+  return dateStrFrom(now);
+}
 
 export function parseDate(s) {
   const [y, m, d] = s.split('-').map(Number);
@@ -23,7 +27,9 @@ export function addDays(s, n) {
 }
 
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
-export function weekdayOf(s) { return WEEK[parseDate(s).getDay()]; }
+export function weekdayOf(s) {
+  return WEEK[parseDate(s).getDay()];
+}
 
 export function formatDate(s) {
   const [, m, d] = s.split('-').map(Number);
@@ -35,7 +41,9 @@ export function formatMonth(s) {
   return `${y}年${m}月`;
 }
 
-export function monthKey(s) { return s.slice(0, 7); }
+export function monthKey(s) {
+  return s.slice(0, 7);
+}
 
 export function currentMonthKey(now = new Date()) {
   return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
@@ -55,9 +63,13 @@ export function weekStartOf(s) {
   return dateStrFrom(d);
 }
 
-export function weekEndOf(s) { return addDays(weekStartOf(s), 6); }
+export function weekEndOf(s) {
+  return addDays(weekStartOf(s), 6);
+}
 
-export function isInRange(s, start, end) { return s >= start && s <= end; }
+export function isInRange(s, start, end) {
+  return s >= start && s <= end;
+}
 
 // ---------- 默认数据 ----------
 export function defaultData() {
@@ -65,12 +77,12 @@ export function defaultData() {
     version: 1,
     updatedAt: null,
     vault: null,
-    settings: { theme: 'white' },
+    settings: { theme: 'peach' },
     memos: [],
     plans: {},
     projects: [],
     clients: [],
-    meals: {},
+    notes: [],
     ledger: [],
     budgets: {},
     categories: [
@@ -80,8 +92,8 @@ export function defaultData() {
       { name: '住房', kind: 'expense', builtin: true },
       { name: '医疗', kind: 'expense', builtin: true },
       { name: '其他', kind: 'expense', builtin: true },
-      { name: '工资收入', kind: 'income', builtin: true }
-    ]
+      { name: '工资收入', kind: 'income', builtin: true },
+    ],
   };
 }
 
@@ -96,8 +108,14 @@ export function validateData(o) {
   for (const k of ['memos', 'projects', 'clients', 'ledger', 'categories']) {
     if (!Array.isArray(o[k])) errors.push(`缺少数组字段 ${k}`);
   }
-  for (const k of ['plans', 'meals']) {
-    if (!o[k] || typeof o[k] !== 'object' || Array.isArray(o[k])) errors.push(`缺少对象字段 ${k}`);
+  if (!o.plans || typeof o.plans !== 'object' || Array.isArray(o.plans)) {
+    errors.push('缺少对象字段 plans');
+  }
+  // notes 为可选字段（兼容旧数据/旧备份）；一旦存在必须是数组，且每项必须是对象
+  if ('notes' in o && !Array.isArray(o.notes)) {
+    errors.push('notes 必须是数组');
+  } else if ('notes' in o && o.notes.some((n) => !n || typeof n !== 'object' || Array.isArray(n))) {
+    errors.push('notes 中的项目必须是对象');
   }
   // budgets 为可选字段（兼容旧数据），但一旦存在必须是对象
   if ('budgets' in o && (o.budgets === null || typeof o.budgets !== 'object' || Array.isArray(o.budgets))) {
@@ -114,6 +132,23 @@ export function validateData(o) {
     errors.push(`settings.theme 非法：${o.settings.theme}`);
   }
   return { ok: errors.length === 0, errors };
+}
+
+// 数据迁移：兼容旧版本数据文件/旧备份
+// - 补全 notes（个人笔记）数组
+// - 清理已下线的 meals（饮食计划）数据
+// 非对象输入原样返回，保证调用方无需额外判空。
+export function migrateData(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return o;
+  if (!Array.isArray(o.notes)) o.notes = [];
+  else o.notes = o.notes.filter((n) => n && typeof n === 'object' && !Array.isArray(n));
+  if ('meals' in o) delete o.meals;
+  if (!o.settings || typeof o.settings !== 'object' || Array.isArray(o.settings)) {
+    o.settings = { theme: THEME_DEFAULT };
+  } else if (!isThemeKey(o.settings.theme)) {
+    o.settings.theme = THEME_DEFAULT;
+  }
+  return o;
 }
 
 export function uid(prefix) {
@@ -146,13 +181,16 @@ export function normalizeRepoUrl(raw) {
 // 归一化本地路径：去空白与首尾引号（兼容"复制文件地址"自带的引号）
 // 合法返回原样路径（保留原生分隔符）；空返回 ''；非本地绝对路径（网页链接/相对路径等）返回 null
 export function normalizeLocalPath(raw) {
-  const s = String(raw || '').trim().replace(/^["']+|["']+$/g, '').trim();
+  const s = String(raw || '')
+    .trim()
+    .replace(/^["']+|["']+$/g, '')
+    .trim();
   if (!s) return '';
-  if (/^https?:\/\//i.test(s)) return null;   // 明确是网页链接
-  if (/^[a-zA-Z]:[\\/]/.test(s)) return s;    // Windows 盘符路径 C:\ 或 C:/
-  if (/^\\\\/.test(s)) return s;              // UNC 共享 \\server\share\...
-  if (/^\//.test(s)) return s;                // POSIX 绝对路径 /home/...
-  return null;                                // 相对路径有歧义，不支持
+  if (/^https?:\/\//i.test(s)) return null; // 明确是网页链接
+  if (/^[a-zA-Z]:[\\/]/.test(s)) return s; // Windows 盘符路径 C:\ 或 C:/
+  if (/^\\\\/.test(s)) return s; // UNC 共享 \\server\share\...
+  if (/^\//.test(s)) return s; // POSIX 绝对路径 /home/...
+  return null; // 相对路径有歧义，不支持
 }
 
 // 判断已存链接是否为网页链接（否则视为本地路径，点击时由本机服务调系统默认程序打开）
@@ -162,7 +200,11 @@ export function isWebLink(url) {
 
 // 本地路径默认标题：最后一段文件/文件夹名（保留扩展名，便于辨认文档类型）
 export function docFileTitle(p) {
-  const seg = String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop();
+  const seg = String(p || '')
+    .replace(/[\\/]+$/, '')
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop();
   return seg || String(p || '');
 }
 
@@ -173,7 +215,11 @@ export function docLinkTitle(url) {
     const seg = u.pathname.split('/').filter(Boolean).pop();
     if (!seg) return u.hostname;
     let name = seg;
-    try { name = decodeURIComponent(seg); } catch { /* 保留原段落 */ }
+    try {
+      name = decodeURIComponent(seg);
+    } catch {
+      /* 保留原段落 */
+    }
     return name.replace(/\.[a-z0-9]+$/i, '') || u.hostname;
   } catch {
     return url;
@@ -218,7 +264,7 @@ export function parseDocLinks(raw) {
 // 将 links 数组序列化为编辑表单文本（每行 `标题|链接`，无标题仅链接），供编辑弹窗回填
 export function formatDocLinks(links) {
   return (Array.isArray(links) ? links : [])
-    .map(l => {
+    .map((l) => {
       const t = String(l?.title || '').trim();
       const u = String(l?.url || '').trim();
       if (!u) return '';
@@ -231,7 +277,7 @@ export function formatDocLinks(links) {
 // ---------- 今日计划 ----------
 // 看"今天"时的有效列表 = 今天自己的 + 所有未完成的过期任务（顺延）
 export function assembleToday(plans, today) {
-  const own = (plans[today] || []).map(it => ({ ...it, carried: false }));
+  const own = (plans[today] || []).map((it) => ({ ...it, carried: false }));
   const carried = [];
   for (const key of Object.keys(plans)) {
     if (key < today) {
@@ -257,7 +303,7 @@ export function overdueItems(plans, today) {
 
 export function planProgress(items) {
   const total = items.length;
-  const done = items.filter(i => i.done).length;
+  const done = items.filter((i) => i.done).length;
   return { total, done };
 }
 
@@ -275,7 +321,7 @@ export function validateTimeRange(start, end) {
   const s = String(start || '').trim();
   const e = String(end || '').trim();
   if (!s && !e) return { ok: true };
-  const okTime = t => /^\d{2}:\d{2}$/.test(t) && Number(t.slice(0, 2)) <= 23 && Number(t.slice(3, 5)) <= 59;
+  const okTime = (t) => /^\d{2}:\d{2}$/.test(t) && Number(t.slice(0, 2)) <= 23 && Number(t.slice(3, 5)) <= 59;
   if (s && !okTime(s)) return { ok: false, error: '开始时间格式不正确' };
   if (e && !okTime(e)) return { ok: false, error: '结束时间格式不正确' };
   if (s && e && s > e) return { ok: false, error: '结束时间不能早于开始时间' };
@@ -302,8 +348,8 @@ export function buildPlanFromRow(row) {
       note: String(note ?? '').trim(),
       origDate: d,
       timeStart: String(timeStart ?? '').trim(),
-      timeEnd: String(timeEnd ?? '').trim()
-    }
+      timeEnd: String(timeEnd ?? '').trim(),
+    },
   };
 }
 
@@ -324,10 +370,16 @@ export function logsOnDate(projects, date) {
   return n;
 }
 
+// 项目是否已结项
+export function isProjectClosed(project) {
+  if (!project) return false;
+  return !!(project.closed || project.archived || project.status === 'closed' || project.status === 'done');
+}
+
 // 拖拽移动项目：在数组中按目标位置重新排列（同项目拖动也可重排）
 // targetIndex 为目标插入位置，越界自动收拢到边界
 export function moveProject(projects, projectId, targetIndex) {
-  const i = projects.findIndex(p => p.id === projectId);
+  const i = projects.findIndex((p) => p.id === projectId);
   if (i === -1) return { index: -1, changed: false };
   const [project] = projects.splice(i, 1);
   const idx = Math.max(0, Math.min(targetIndex, projects.length));
@@ -335,21 +387,34 @@ export function moveProject(projects, projectId, targetIndex) {
   return { index: idx, changed: true };
 }
 
+// 对项目列表排序：未结项的在前，已结项的置于底部；各组内保持原有相对顺序
+export function sortProjectsByStatus(projects) {
+  if (!Array.isArray(projects)) return [];
+  const active = [];
+  const closed = [];
+  for (const p of projects) {
+    if (isProjectClosed(p)) closed.push(p);
+    else active.push(p);
+  }
+  return active.concat(closed);
+}
+
 // 拖拽移动任务：改状态 + 在目标列按 order 重新编号排序（同列拖动也可重排）
 // targetIndex 为目标列排序后的插入位置，越界自动收拢到边界
 export function moveTask(project, taskId, status, targetIndex) {
   const tasks = project.tasks || [];
-  const i = tasks.findIndex(t => t.id === taskId);
+  const i = tasks.findIndex((t) => t.id === taskId);
   if (i === -1) return { from: null, to: null, index: -1, changed: false };
   const task = tasks[i];
   const from = task.status;
   task.status = status;
-  const group = tasks.filter(t => t.status === status)
-    .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
+  const group = tasks.filter((t) => t.status === status).sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity));
   const idx = Math.max(0, Math.min(targetIndex, group.length - 1));
-  const ordered = group.filter(t => t.id !== taskId);
+  const ordered = group.filter((t) => t.id !== taskId);
   ordered.splice(idx, 0, task);
-  ordered.forEach((t, n) => { t.order = n; });
+  ordered.forEach((t, n) => {
+    t.order = n;
+  });
   return { from, to: status, index: idx, changed: true };
 }
 
@@ -357,7 +422,7 @@ export function moveTask(project, taskId, status, targetIndex) {
 // 任务不存在（或 tasks 为空）时返回 { changed: false }，不做任何修改
 export function deleteTask(project, taskId) {
   const tasks = project ? project.tasks : [];
-  const i = (tasks || []).findIndex(t => t.id === taskId);
+  const i = (tasks || []).findIndex((t) => t.id === taskId);
   if (i === -1) return { changed: false };
   tasks.splice(i, 1);
   return { changed: true };
@@ -377,9 +442,9 @@ export function reorderPlansBySequence(plans, seq) {
   for (const [date, ids] of byDate) {
     const arr = (plans && plans[date]) || [];
     if (!arr.length) continue;
-    const byId = new Map(arr.map(x => [x.id, x]));
-    const wanted = ids.map(id => byId.get(id)).filter(Boolean);
-    const rest = arr.filter(x => !ids.includes(x.id));
+    const byId = new Map(arr.map((x) => [x.id, x]));
+    const wanted = ids.map((id) => byId.get(id)).filter(Boolean);
+    const rest = arr.filter((x) => !ids.includes(x.id));
     const next = [...wanted, ...rest];
     if (next.length !== arr.length || next.some((x, i) => x !== arr[i])) {
       plans[date] = next;
@@ -389,39 +454,15 @@ export function reorderPlansBySequence(plans, seq) {
   return changed;
 }
 
-// ---------- 饮食计划 ----------
-const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
-export function dietProgress(meals, date) {
-  const day = meals[date] || {};
-  const dots = {};
-  let count = 0;
-  for (const m of MEALS) {
-    const has = !!(day[m] && day[m].food);
-    dots[m] = has;
-    if (has) count++;
-  }
-  return { dots, count };
-}
-
-// 距最近一次有记录的日期隔了多少天（当天有记录返回 0，从未记录返回 Infinity）
-export function daysSinceLastMeal(meals, today) {
-  let latest = null;
-  for (const key of Object.keys(meals)) {
-    if (key <= today && dietProgress(meals, key).count > 0) {
-      if (!latest || key > latest) latest = key;
-    }
-  }
-  if (!latest) return Infinity;
-  return Math.round((parseDate(today) - parseDate(latest)) / 86400000);
-}
-
 // ---------- 账目计划 ----------
 export function ledgerMonthStats(ledger, mk) {
-  let income = 0, expense = 0;
+  let income = 0,
+    expense = 0;
   for (const e of ledger) {
     if (monthKey(e.date) !== mk) continue;
     const amt = Number(e.amount) || 0;
-    if (e.type === 'income') income += amt; else expense += amt;
+    if (e.type === 'income') income += amt;
+    else expense += amt;
   }
   return { income, expense, balance: income - expense };
 }
@@ -461,14 +502,14 @@ export function budgetStatus(expense, budget) {
   const b = Number(budget) || 0;
   const e = Number(expense) || 0;
   if (b <= 0) return { hasBudget: false, pct: 0, remaining: 0, over: false };
-  return { hasBudget: true, pct: Math.min(100, Math.round(e / b * 10000) / 100), remaining: b - e, over: b - e < 0 };
+  return { hasBudget: true, pct: Math.min(100, Math.round((e / b) * 10000) / 100), remaining: b - e, over: b - e < 0 };
 }
 
 // 支出类别占比（用于环形图）：返回 [{ name, total, pct }]，pct 为该类占总支出的百分比
 export function categoryPercentages(ranking) {
   const total = ranking.reduce((n, r) => n + r.total, 0);
   if (!total) return [];
-  return ranking.map(r => ({ name: r.name, total: r.total, pct: Math.round(r.total / total * 10000) / 100 }));
+  return ranking.map((r) => ({ name: r.name, total: r.total, pct: Math.round((r.total / total) * 10000) / 100 }));
 }
 
 // ---------- 备忘 ----------
@@ -501,14 +542,13 @@ export function memoIsDue(m, now = new Date()) {
 
 // 备忘排序：置顶 → 有提醒时间的按时间升序（最早的在最前）→ 其余按创建时间倒序
 export function sortMemos(memos) {
-  const t = m => {
+  const t = (m) => {
     const d = parseMemoTime(m);
     return d ? d.getTime() : Infinity;
   };
-  return [...(memos || [])].sort((a, b) =>
-    (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) ||
-    t(a) - t(b) ||
-    (b.createdAt || '').localeCompare(a.createdAt || '')
+  return [...(memos || [])].sort(
+    (a, b) =>
+      (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || t(a) - t(b) || (b.createdAt || '').localeCompare(a.createdAt || ''),
   );
 }
 
@@ -521,9 +561,8 @@ export function computeHomeSummary(state, today) {
     planDone: done,
     devDoing: allDevDoing(state.projects || []),
     devLogsToday: logsOnDate(state.projects || [], today),
-    mealsToday: dietProgress(state.meals || {}, today).count,
     expenseToday: expenseToday(state.ledger || [], today),
-    monthBalance: ledgerMonthStats(state.ledger || [], monthKey(today)).balance
+    monthBalance: ledgerMonthStats(state.ledger || [], monthKey(today)).balance,
   };
 }
 
@@ -531,9 +570,9 @@ export function computeHomeSummary(state, today) {
 // 今日待办预览：取前 N 条未完成的计划（含顺延）
 export function pendingPlanPreview(plans, today, limit = 3) {
   return assembleToday(plans || {}, today)
-    .filter(i => !i.done)
+    .filter((i) => !i.done)
     .slice(0, limit)
-    .map(i => ({ text: i.text, important: !!i.important }));
+    .map((i) => ({ text: i.text, important: !!i.important }));
 }
 
 // 开发工作预览：跨项目取前 N 条「进行中」任务
@@ -550,42 +589,36 @@ export function doingTasksPreview(projects, limit = 3) {
   return out;
 }
 
-// 饮食预览：当天有记录的餐次，按早餐→午餐→晚餐→加餐顺序
-const MEAL_ORDER = { breakfast: 0, lunch: 1, dinner: 2, snack: 3 };
-export function mealEntriesOn(meals, date) {
-  const day = meals?.[date] || {};
-  return Object.entries(day)
-    .filter(([, v]) => v && v.food)
-    .map(([key, v]) => ({ key, food: v.food }))
-    .sort((a, b) => (MEAL_ORDER[a.key] ?? 9) - (MEAL_ORDER[b.key] ?? 9));
-}
-
 // 账目预览：最近 N 条账目（按日期倒序）
 export function recentLedger(ledger, limit = 3) {
   return [...(ledger || [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
 }
 
 // ---------- 分类管理 ----------
-export function normalizeCategoryName(n) { return String(n || '').trim(); }
+export function normalizeCategoryName(n) {
+  return String(n || '').trim();
+}
 
 export function addCategory(categories, name) {
   const n = normalizeCategoryName(name);
   if (!n) return { ok: false, error: '分类名不能为空' };
-  if (categories.some(c => c.name === n)) return { ok: false, error: '分类已存在' };
+  if (categories.some((c) => c.name === n)) return { ok: false, error: '分类已存在' };
   categories.push({ name: n, kind: 'both', builtin: false });
   return { ok: true };
 }
 
 export function canDeleteCategory(categories, name, ledger) {
-  const cat = categories.find(c => c.name === name);
+  const cat = categories.find((c) => c.name === name);
   if (!cat) return { ok: false, error: '分类不存在' };
   if (cat.builtin) return { ok: false, error: '默认分类不可删除' };
-  if ((ledger || []).some(e => e.category === name)) return { ok: false, error: '该分类下已有账目，请先修改账目' };
+  if ((ledger || []).some((e) => e.category === name)) return { ok: false, error: '该分类下已有账目，请先修改账目' };
   return { ok: true };
 }
 
 // ---------- 工作台外观（主题） ----------
-export function isValidTheme(key) { return isThemeKey(key); }
+export function isValidTheme(key) {
+  return isThemeKey(key);
+}
 
 // 读取当前主题：state.settings.theme 非法/缺失时回退默认
 export function currentTheme(state) {

@@ -9,7 +9,7 @@ export async function saveData(obj) {
   const r = await fetch('/api/data', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(obj)
+    body: JSON.stringify(obj),
   });
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
@@ -33,11 +33,15 @@ export async function shutdownServer() {
   const r = await fetch('/api/shutdown', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: '{}'
+    body: '{}',
   });
   if (!r.ok) {
     let msg = '';
-    try { msg = (await r.json()).error || ''; } catch { /* 忽略 */ }
+    try {
+      msg = (await r.json()).error || '';
+    } catch {
+      /* 忽略 */
+    }
     throw new Error(msg || `关闭失败（HTTP ${r.status}）`);
   }
   return r.json();
@@ -48,13 +52,18 @@ export async function openLocalPath(p) {
   const r = await fetch('/api/open', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: p })
+    body: JSON.stringify({ path: p }),
   });
   if (!r.ok) {
     let msg = '';
-    try { msg = (await r.json()).error || ''; } catch { /* 非 JSON 响应（如 Express 默认 404 页面） */ }
+    try {
+      msg = (await r.json()).error || '';
+    } catch {
+      /* 非 JSON 响应（如 Express 默认 404 页面） */
+    }
     // 返回非 JSON 的 404：通常说明正在运行的是没有 /api/open 路由的旧实例
-    if (!msg && r.status === 404) msg = '当前运行的 WorkLift 是旧版本（不含打开本地文件功能），请完全关闭后重新运行 start.bat';
+    if (!msg && r.status === 404)
+      msg = '当前运行的 WorkLift 是旧版本（不含打开本地文件功能），请完全关闭后重新运行 start.bat';
     throw new Error(msg || `打开失败（HTTP ${r.status}）`);
   }
   return r.json();

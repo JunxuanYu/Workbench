@@ -1,6 +1,6 @@
 // 前端状态管理：变更即保存（防抖200ms）
 import { getData, saveData } from './api.js';
-import { defaultData } from './logic.js';
+import { defaultData, migrateData } from './logic.js';
 import { toast } from './components/toast.js';
 
 let state = null;
@@ -8,7 +8,7 @@ let timer = null;
 
 export async function loadData() {
   try {
-    state = await getData();
+    state = migrateData(await getData());
   } catch (e) {
     state = defaultData();
     throw e;
@@ -16,14 +16,16 @@ export async function loadData() {
   return state;
 }
 
-export function getState() { return state; }
+export function getState() {
+  return state;
+}
 
 function scheduleSave() {
   clearTimeout(timer);
   timer = setTimeout(async () => {
     try {
       await saveData(JSON.parse(JSON.stringify(state)));
-    } catch (e) {
+    } catch {
       toast('保存失败，请重试');
     }
   }, 200);
@@ -38,7 +40,7 @@ export function mutate(fn) {
 
 // 整体替换（恢复备份/清空后使用）
 export function replaceState(newState) {
-  state = newState;
+  state = migrateData(newState);
   state.updatedAt = new Date().toISOString();
   scheduleSave();
 }
