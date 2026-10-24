@@ -1,157 +1,33 @@
-// PDF 转换工具：支持 PDF → Word / 图片 / Excel / PPT / TXT
-// 使用 pdf.js（CDN）解析 PDF，浏览器端完成转换
+// PDF 转换工具：PDF → Word / 图片 / Excel / PPT / TXT / Markdown
+// 本机 Node 服务通过子进程调用 Python（python/pdf_convert.py）转换为真实格式
+// 浏览器端只做上传 / 下载 / 预览，不加载任何外部 CDN
 
-const PDFJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174';
-let pdfjsLib = null;
-let pdfjsLoading = null;
-
-// ---------- pdf.js 动态加载 ----------
-async function loadPdfJs() {
-  if (pdfjsLib) return pdfjsLib;
-  if (pdfjsLoading) return pdfjsLoading;
-
-  pdfjsLoading = (async () => {
-    // 加载主库
-    await loadScript(`${PDFJS_CDN}/pdf.min.js`);
-    pdfjsLib = globalThis.pdfjsLib;
-    if (!pdfjsLib) throw new Error('pdf.js 加载失败');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_CDN}/pdf.worker.min.js`;
-    return pdfjsLib;
-  })();
-
-  return pdfjsLoading;
-}
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = resolve;
-    s.onerror = () => reject(new Error(`脚本加载失败: ${src}`));
-    document.head.append(s);
-  });
-}
-
-// ---------- PDF 解析 ----------
-async function parsePdf(arrayBuffer) {
-  const lib = await loadPdfJs();
-  const pdf = await lib.getDocument({ data: arrayBuffer }).promise;
-  const pages = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    // 提取文本
-    const textContent = await page.getTextContent();
-    const text = textContent.items.map(it => it.str).join('');
-    // 渲染为图片（缩放至合适宽度）
-    const viewport = page.getViewport({ scale: 1.5 });
-    const canvas = document.createElement('canvas');
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    const ctx = canvas.getContext('2d');
-    await page.render({ canvasContext: ctx, viewport }).promise;
-    const imageData = canvas.toDataURL('image/png');
-    pages.push({ num: i, text, imageData, width: viewport.width, height: viewport.height });
-  }
-  return { numPages: pdf.numPages, pages };
-}
-
-// ---------- 转换目标定义 ----------
 export const FORMAT_OPTIONS = [
-  { id: 'word',   label: 'Word (.doc)',  icon: '📄', mime: 'application/msword',                ext: '.doc' },
-  { id: 'image',  label: '图片 (.png)',   icon: '🖼️', mime: 'image/png',                          ext: '.png' },
-  { id: 'excel',  label: 'Excel (.csv)', icon: '📊', mime: 'text/csv;charset=utf-8',             ext: '.csv' },
-  { id: 'ppt',    label: 'PPT (.ppt)',   icon: '📽️', mime: 'application/vnd.ms-powerpoint',     ext: '.ppt' },
-  { id: 'txt',    label: 'TXT (.txt)',   icon: '📝', mime: 'text/plain;charset=utf-8',           ext: '.txt' }
+  {
+    id: 'word',
+    label: 'Word (.docx)',
+    icon: '📄',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ext: '.docx',
+  },
+  { id: 'image', label: '图片 (.zip)', icon: '🖼️', mime: 'application/zip', ext: '.zip' },
+  {
+    id: 'excel',
+    label: 'Excel (.xlsx)',
+    icon: '📊',
+    mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ext: '.xlsx',
+  },
+  {
+    id: 'ppt',
+    label: 'PPT (.pptx)',
+    icon: '📽️',
+    mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ext: '.pptx',
+  },
+  { id: 'txt', label: 'TXT (.txt)', icon: '📝', mime: 'text/plain;charset=utf-8', ext: '.txt' },
+  { id: 'md', label: 'Markdown (.md)', icon: '📘', mime: 'text/markdown;charset=utf-8', ext: '.md' },
 ];
-
-// ---------- 转换实现 ----------
-
-function convertTxt(pdfData) {
-  const parts = pdfData.pages.map(p => `--- 第 ${p.num} 页 ---\n${p.text}`);
-  return new Blob([parts.join('\n\n')], { type: 'text/plain;charset=utf-8' });
-}
-
-function convertImage(pdfData) {
-  // 多页时打包为单个下载：逐页提供下载链接
-  // 返回所有页面的 dataURL 数组
-  return pdfData.pages.map(p => ({
-    name: `page_${p.num}.png`,
-    dataUrl: p.imageData
-  }));
-}
-
-function convertWord(pdfData) {
-  // 生成 HTML 格式（Word 可直接打开 .doc/HTML）
-  let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
-    xmlns:w="urn:schemas-microsoft-com:office:word"
-    xmlns="http://www.w3.org/TR/REC-html40">
-<head><meta charset="utf-8"><title>PDF转换</title>
-<style>
-body { font-family: "SimSun", serif; margin: 40px; }
-h1 { font-size: 20px; margin-bottom: 20px; }
-.page-break { page-break-after: always; }
-.page-img { max-width: 100%; margin: 10px 0; }
-.page-text { white-space: pre-wrap; font-size: 12px; color: #666; margin: 10px 0; }
-</style></head><body>
-<h1>PDF 文档</h1>`;
-  for (const p of pdfData.pages) {
-    html += `<div class="page-break">
-<h3>第 ${p.num} 页</h3>
-<img class="page-img" src="${p.imageData}" />
-<div class="page-text">${escHtml(p.text)}</div>
-</div>`;
-  }
-  html += '</body></html>';
-  return new Blob(['\ufeff' + html], { type: 'application/msword' });
-}
-
-function convertExcel(pdfData) {
-  // CSV 格式：每页分隔，文本按行排列
-  const lines = [];
-  for (const p of pdfData.pages) {
-    lines.push(`--- 第 ${p.num} 页 ---`);
-    // 将文本按换行或句号分隔成行
-    const pageLines = p.text.split(/\n/).filter(Boolean);
-    for (const line of pageLines) {
-      // CSV 转义：含逗号/引号/换行的字段用引号包裹
-      const escaped = line.includes(',') || line.includes('"') || line.includes('\n')
-        ? `"${line.replace(/"/g, '""')}"` : line;
-      lines.push(escaped);
-    }
-    lines.push('');
-  }
-  return new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-}
-
-function convertPpt(pdfData) {
-  // 生成 HTML 幻灯片（可在浏览器中逐页查看/打印）
-  let html = `<html><head><meta charset="utf-8"><title>PDF 幻灯片</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #222; font-family: sans-serif; }
-.slide { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; page-break-after: always; background: #fff; }
-.slide img { max-width: 90%; max-height: 90%; }
-.slide-num { position: fixed; bottom: 10px; right: 20px; color: #999; font-size: 14px; }
-@media print { .slide { page-break-after: always; } }
-</style></head><body>`;
-  for (const p of pdfData.pages) {
-    html += `<div class="slide">
-<img src="${p.imageData}" />
-<span class="slide-num">${p.num} / ${pdfData.numPages}</span>
-</div>`;
-  }
-  html += '</body></html>';
-  return new Blob(['\ufeff' + html], { type: 'application/vnd.ms-powerpoint' });
-}
-
-const CONVERTERS = {
-  txt: convertTxt,
-  image: convertImage,
-  word: convertWord,
-  excel: convertExcel,
-  ppt: convertPpt
-};
 
 // ---------- 工具入口 ----------
 
@@ -162,11 +38,11 @@ export function createPdfConvertTool() {
     icon: '📑',
     render(container) {
       renderPdfConvert(container);
-    }
+    },
   };
 }
 
-async function renderPdfConvert(container) {
+function renderPdfConvert(container) {
   container.innerHTML = '';
   // 标题
   const heading = document.createElement('h2');
@@ -174,15 +50,39 @@ async function renderPdfConvert(container) {
   heading.textContent = 'PDF 转换工具';
   container.append(heading);
 
-  // 文件选择
-  const fileRow = document.createElement('div');
-  fileRow.style.cssText = 'display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;';
+  // 文件选择区域（支持拖拽上传）
+  const dropZone = document.createElement('div');
+  dropZone.style.cssText =
+    'border:2px dashed var(--border);border-radius:8px;padding:20px;text-align:center;margin-bottom:16px;cursor:pointer;transition:all 0.2s;background:var(--card-bg);';
+  dropZone.innerHTML =
+    '<div style="font-size:14px;margin-bottom:8px;">📁 拖拽 PDF 文件到此处，或点击选择文件</div><div style="font-size:12px;color:var(--text-soft);">支持 .pdf 格式，最大 200MB</div>';
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = '.pdf';
-  fileInput.style.cssText = 'font-size:14px;';
-  fileRow.append(fileInput);
-  container.append(fileRow);
+  fileInput.style.cssText = 'display:none;';
+  dropZone.append(fileInput);
+  dropZone.onclick = () => fileInput.click();
+  dropZone.ondragover = (e) => {
+    e.preventDefault();
+    dropZone.style.borderColor = 'var(--primary)';
+    dropZone.style.background = 'var(--primary-light, rgba(59,130,246,0.05))';
+  };
+  dropZone.ondragleave = () => {
+    dropZone.style.borderColor = 'var(--border)';
+    dropZone.style.background = 'var(--card-bg)';
+  };
+  dropZone.ondrop = (e) => {
+    e.preventDefault();
+    dropZone.style.borderColor = 'var(--border)';
+    dropZone.style.background = 'var(--card-bg)';
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      fileInput.files = e.dataTransfer.files;
+      const event = new Event('change', { bubbles: true });
+      fileInput.dispatchEvent(event);
+    }
+  };
+  container.append(dropZone);
 
   // 状态区
   const status = document.createElement('div');
@@ -191,119 +91,175 @@ async function renderPdfConvert(container) {
 
   // 转换按钮区
   const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;';
+  btnRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center;';
   container.append(btnRow);
 
   // 结果区
   const resultArea = document.createElement('div');
   container.append(resultArea);
 
-  // 禁用所有转换按钮
   let currentFile = null;
-  let currentPdfData = null;
+  let currentToken = null;
+  let currentNumPages = 0;
 
-  const fmtBtns = FORMAT_OPTIONS.map(fmt => {
+  // 重新选择按钮
+  const resetBtn = document.createElement('button');
+  resetBtn.className = 'btn btn-sm';
+  resetBtn.textContent = '🔄 重新选择';
+  resetBtn.style.display = 'none';
+  resetBtn.onclick = () => {
+    currentFile = null;
+    currentToken = null;
+    currentNumPages = 0;
+    fileInput.value = '';
+    const dropDivs = dropZone.querySelectorAll('div');
+    if (dropDivs[0]) dropDivs[0].textContent = '📁 拖拽 PDF 文件到此处，或点击选择文件';
+    if (dropDivs[1]) dropDivs[1].textContent = '支持 .pdf 格式，最大 200MB';
+    status.textContent = '';
+    resultArea.innerHTML = '';
+    fmtBtns.forEach((b) => {
+      b.disabled = true;
+    });
+    resetBtn.style.display = 'none';
+  };
+  btnRow.append(resetBtn);
+
+  const fmtBtns = FORMAT_OPTIONS.map((fmt) => {
     const btn = document.createElement('button');
     btn.className = 'btn btn-sm';
     btn.textContent = `${fmt.icon} ${fmt.label}`;
     btn.disabled = true;
     btn.onclick = () => doConvert(fmt);
     btnRow.append(btn);
-    return { btn, fmt };
+    return btn;
   });
 
-  fileInput.onchange = async () => {
-    const file = fileInput.files[0];
+  const handleFile = async (file) => {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       status.textContent = '❌ 请选择 PDF 文件';
       return;
     }
+    if (file.size === 0) {
+      status.textContent = '❌ 文件为空，请选择有效的 PDF 文件';
+      return;
+    }
+    if (file.size > 200 * 1024 * 1024) {
+      status.textContent = '❌ 文件过大（超过 200MB），请压缩后再试';
+      return;
+    }
     currentFile = file;
-    currentPdfData = null;
-    status.textContent = '⏳ 正在解析 PDF...';
+    currentToken = null;
+    currentNumPages = 0;
+    status.textContent = '⏳ 正在上传并解析 PDF...';
     resultArea.innerHTML = '';
-    fmtBtns.forEach(b => { b.btn.disabled = true; });
+    const dropDivs = dropZone.querySelectorAll('div');
+    if (dropDivs[0]) dropDivs[0].textContent = `📄 ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+    fmtBtns.forEach((b) => {
+      b.disabled = true;
+    });
+    resetBtn.style.display = 'inline-block';
 
     try {
-      const buf = await file.arrayBuffer();
-      currentPdfData = await parsePdf(buf);
-      status.textContent = `✅ 已加载「${file.name}」— 共 ${currentPdfData.numPages} 页`;
-      fmtBtns.forEach(b => { b.btn.disabled = false; });
+      const resp = await fetch(`/api/tools/pdf/parse?name=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/pdf' },
+        body: await file.arrayBuffer(),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        status.textContent =
+          resp.status === 503
+            ? '❌ Python 环境未就绪，请运行 start.bat 完成环境安装'
+            : resp.status === 413
+              ? '❌ 文件过大，超出上传上限'
+              : `❌ 解析失败: ${data.error || `HTTP ${resp.status}`}`;
+        return;
+      }
+      currentToken = data.token;
+      currentNumPages = data.numPages || 0;
+      status.textContent = `✅ 已加载「${file.name}」— 共 ${data.numPages} 页，可选择转换格式`;
+      fmtBtns.forEach((b) => {
+        b.disabled = false;
+      });
     } catch (e) {
       status.textContent = `❌ 解析失败: ${e.message}`;
     }
   };
 
+  fileInput.onchange = async () => {
+    await handleFile(fileInput.files[0]);
+  };
+
   async function doConvert(fmt) {
-    if (!currentPdfData) return;
+    if (!currentToken) return;
     status.textContent = `⏳ 正在转换为 ${fmt.label}...`;
     resultArea.innerHTML = '';
+    fmtBtns.forEach((b) => {
+      b.disabled = true;
+    });
 
     try {
-      const result = CONVERTERS[fmt.id](currentPdfData);
+      const resp = await fetch(
+        `/api/tools/pdf/convert?token=${encodeURIComponent(currentToken)}&format=${encodeURIComponent(fmt.id)}`,
+      );
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        status.textContent =
+          resp.status === 404 ? '❌ 会话已过期，请重新选择文件' : `❌ 转换失败: ${data.error || `HTTP ${resp.status}`}`;
+        return;
+      }
+      const blob = await resp.blob();
+      const baseName = currentFile?.name?.replace(/\.pdf$/i, '') || 'output';
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${baseName}${fmt.ext}`;
+      link.className = 'btn btn-primary';
+      link.textContent = `⬇ 下载 ${fmt.label}`;
+      link.style.cssText = 'display:inline-block;margin-top:8px;';
+      resultArea.append(link);
 
-      if (fmt.id === 'image' && Array.isArray(result)) {
-        // 图片：显示预览 + 逐页下载
+      // 图片：逐页预览（复用本机转换好的 PNG）
+      if (fmt.id === 'image') {
         const preview = document.createElement('div');
-        preview.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
-        for (const img of result) {
+        preview.style.cssText = 'display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;';
+        for (let i = 1; i <= currentNumPages; i++) {
           const wrap = document.createElement('div');
           wrap.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:8px;';
           const imgEl = document.createElement('img');
-          imgEl.src = img.dataUrl;
-          imgEl.style.cssText = 'width:100%;border-radius:4px;';
-          const dlBtn = document.createElement('a');
-          dlBtn.href = img.dataUrl;
-          dlBtn.download = img.name;
-          dlBtn.className = 'btn btn-sm';
-          dlBtn.textContent = `⬇ 下载 ${img.name}`;
-          wrap.append(imgEl, dlBtn);
+          imgEl.src = `/api/tools/pdf/page?token=${encodeURIComponent(currentToken)}&page=${i}`;
+          imgEl.style.cssText = 'width:100%;max-width:260px;border-radius:4px;';
+          const cap = document.createElement('div');
+          cap.style.cssText = 'font-size:12px;color:var(--text-soft);text-align:center;margin-top:4px;';
+          cap.textContent = `第 ${i} 页`;
+          wrap.append(imgEl, cap);
           preview.append(wrap);
         }
         resultArea.append(preview);
-        status.textContent = `✅ 转换完成，共 ${result.length} 张图片`;
-      } else {
-        // Blob：提供下载链接
-        const baseName = currentFile?.name?.replace(/\.pdf$/i, '') || 'output';
-        const url = URL.createObjectURL(result);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${baseName}${fmt.ext}`;
-        link.className = 'btn btn-primary';
-        link.textContent = `⬇ 下载 ${fmt.label}`;
-        link.style.cssText = 'display:inline-block;margin-top:8px;';
-        resultArea.append(link);
-
-        // 如果是文本格式，显示预览
-        if (fmt.id === 'txt' || fmt.id === 'excel') {
-          const text = await result.text();
-          const preview = document.createElement('pre');
-          preview.style.cssText = 'background:var(--gray-light);padding:12px;border-radius:8px;font-size:12px;max-height:300px;overflow:auto;margin-top:10px;white-space:pre-wrap;';
-          preview.textContent = text.slice(0, 5000) + (text.length > 5000 ? '\n...（已截断）' : '');
-          resultArea.append(preview);
-        }
-
-        // Word/PPT 预览提示
-        if (fmt.id === 'word' || fmt.id === 'ppt') {
-          const hint = document.createElement('div');
-          hint.style.cssText = 'font-size:12px;color:var(--text-soft);margin-top:8px;';
-          hint.textContent = '💡 下载后用 Word / PowerPoint 打开即可查看';
-          resultArea.append(hint);
-        }
-
-        status.textContent = `✅ 转换完成 — ${fmt.label}`;
       }
+
+      // TXT / Markdown：内联预览前 5000 字
+      if (fmt.id === 'txt' || fmt.id === 'md') {
+        const text = await blob.text();
+        const preview = document.createElement('pre');
+        preview.style.cssText =
+          'background:var(--gray-light);padding:12px;border-radius:8px;font-size:12px;max-height:300px;overflow:auto;margin-top:10px;white-space:pre-wrap;';
+        preview.textContent = text.slice(0, 5000) + (text.length > 5000 ? '\n...（已截断）' : '');
+        resultArea.append(preview);
+      }
+
+      // Word / Excel / PPT：下载提示
+      if (fmt.id === 'word' || fmt.id === 'excel' || fmt.id === 'ppt') {
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:12px;color:var(--text-soft);margin-top:8px;';
+        hint.textContent = '💡 下载后用 Word / Excel / PowerPoint 打开即可查看';
+        resultArea.append(hint);
+      }
+
+      status.textContent = `✅ 转换完成 — ${fmt.label}`;
     } catch (e) {
       status.textContent = `❌ 转换失败: ${e.message}`;
     }
   }
 }
-
-// HTML 转义（防 XSS）
-function escHtml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-// ---------- 导出纯逻辑函数供测试 ----------
-export { parsePdf, CONVERTERS, convertTxt, convertWord, convertExcel, convertPpt, convertImage };

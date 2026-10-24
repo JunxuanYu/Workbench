@@ -1,6 +1,7 @@
 // 工具箱：通用工具注册框架 — 左栏工具列表 + 右栏渲染区
 import { emptyEl } from '../components/empty.js';
 import { createPdfConvertTool } from '../tools/pdf-convert.js';
+import { createMdConvertTool } from '../tools/md-convert.js';
 import { createJsonConvertTool } from '../tools/json-convert.js';
 
 // ---------- 工具注册表 ----------
@@ -14,7 +15,7 @@ export function registerTool(tool) {
   if (!tool || !tool.id || !tool.name || typeof tool.render !== 'function') {
     throw new Error('工具必须包含 id、name 和 render 函数');
   }
-  if (tools.some(t => t.id === tool.id)) {
+  if (tools.some((t) => t.id === tool.id)) {
     throw new Error(`工具 "${tool.id}" 已注册`);
   }
   tools.push(tool);
@@ -27,6 +28,7 @@ export function getTools() {
 
 // ---------- 内置工具注册 ----------
 registerTool(createPdfConvertTool());
+registerTool(createMdConvertTool());
 registerTool(createJsonConvertTool());
 
 // ---------- 页面状态 ----------
@@ -44,7 +46,7 @@ export async function render(container) {
   container.append(title, sub);
 
   // 选中校验
-  if (!tools.some(t => t.id === selectedId)) {
+  if (!tools.some((t) => t.id === selectedId)) {
     selectedId = tools[0]?.id || null;
   }
 
@@ -71,8 +73,12 @@ export async function render(container) {
     for (const t of tools) {
       const item = document.createElement('div');
       item.className = 'row';
-      item.style.cssText = 'cursor:pointer;' + (t.id === selectedId ? 'border-color:var(--accent);background:#eef1fe;' : '');
-      item.onclick = () => { selectedId = t.id; render(container); };
+      item.style.cssText =
+        'cursor:pointer;' + (t.id === selectedId ? 'border-color:var(--accent);background:#eef1fe;' : '');
+      item.onclick = () => {
+        selectedId = t.id;
+        render(container);
+      };
       const label = document.createElement('div');
       label.style.cssText = 'font-weight:600;font-size:13px;';
       label.textContent = `${t.icon || '🔧'} ${t.name}`;
@@ -87,7 +93,7 @@ export async function render(container) {
   const right = document.createElement('div');
   right.style.cssText = 'flex:1;min-width:0;';
 
-  const tool = tools.find(t => t.id === selectedId) || null;
+  const tool = tools.find((t) => t.id === selectedId) || null;
   if (!tool) {
     right.append(emptyEl('暂无工具，可通过 registerTool() 注册'));
   } else {
