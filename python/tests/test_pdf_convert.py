@@ -45,6 +45,61 @@ def make_fixture(path, pages=3):
     doc.close()
 
 
+def make_table_fixture(path):
+    """生成带真实表格(线条 + 单元格文字)与表外标题的单页 PDF。"""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 80), "报销明细", fontsize=20, fontname="china-s")
+    xs = (72, 222, 372, 522)
+    ys = (110, 140, 170, 200)
+    for y in ys:
+        page.draw_line(fitz.Point(xs[0], y), fitz.Point(xs[-1], y))
+    for x in xs:
+        page.draw_line(fitz.Point(x, ys[0]), fitz.Point(x, ys[-1]))
+    cells = [
+        ["姓名", "项目", "金额"],
+        ["张三", "差旅", "128.50"],
+        ["李四", "餐饮", "66.00"],
+    ]
+    for i, row in enumerate(cells):
+        for j, val in enumerate(row):
+            page.insert_text((xs[j] + 8, ys[i] + 20), val, fontsize=11, fontname="china-s")
+    doc.save(path)
+    doc.close()
+
+
+def make_scanned_fixture(path):
+    """生成无任何可提取文本的"扫描件" PDF(整页仅一张图片)。"""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    png = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 300, 200))
+    png.clear_with(0x112233)
+    page.insert_image(fitz.Rect(40, 40, 555, 800), pixmap=png)
+    doc.save(path)
+    doc.close()
+
+
+def make_header_footer_fixture(path, pages=3):
+    """生成每页都带重复页眉与页脚页码的 PDF。"""
+    doc = fitz.open()
+    for i in range(1, pages + 1):
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 30), "WorkLift 机密文档", fontsize=9, fontname="china-s")
+        page.insert_text((280, 815), f"机密文档 第 {i} 页", fontsize=9, fontname="china-s")
+        page.insert_text((72, 200), f"正文段落{i}", fontsize=12, fontname="china-s")
+    doc.save(path)
+    doc.close()
+
+
+def png_size(path):
+    """读取 PNG 的 IHDR 宽高(避免引入 Pillow 依赖)。"""
+    with open(path, "rb") as f:
+        data = f.read(33)
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "不是 PNG 文件"
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+
+
+
 def run_cli(args):
     return subprocess.run(
         [sys.executable, str(CLI), *args],
@@ -193,13 +248,74 @@ class PdfConvertTest(unittest.TestCase):
         r = run_cli([self.pdf, out, "--format", "word"])
         self.assertEqual(r.returncode, 0)
         doc = Document(out)
-        headings = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
-        self.assertEqual(len(headings), 3)
-        self.assertIn("第 1 页", headings)
-        self.assertIn("第 3 页", headings)
+        # 每页页标记固定为 Heading 1
+        h1 = [p.text for p in doc.paragraphs if p.style.name == "Heading 1"]
+        self.assertEqual(h1, ["第 1 页", "第 2 页", "第 3 页"])
+        # 内容标题按字号识别为更深层级(不再把标题写成普通正文)
+        h2 = [p.text for p in doc.paragraphs if p.style.name == "Heading 2"]
+        self.assertIn("第 1 页 测试文档", h2)
         all_text = "\n".join(p.text for p in doc.paragraphs)
         self.assertIn("测试文档", all_text)
         self.assertIn("正文内容", all_text)
+        # 文本页优先可编辑文字:只保留 PDF 内真实图片(每页 1 张小图),
+        # 不再整页贴图造成"文字 + 截图"重复(整页图宽 6.5 英寸)
+        self.assertEqual(len(doc.inline_shapes), 3)
+        for shape in doc.inline_shapes:
+            self.assertLess(shape.width.inches, 2.0, "文本页不应出现整页截图")
+
+    def test_docx_default_font_is_cjk_friendly(self):
+        out = self.out("font.docx")
+        pages = [pdf_convert.Page(num=1, text="中文", blocks=[])]
+        pdf_convert.to_docx(pages, out)
+        doc = Document(out)
+        self.assertEqual(doc.styles["Normal"].font.name, "Microsoft YaHei")
+
+    def test_docx_preserves_bold_runs(self):
+        out = self.out("bold.docx")
+        pages = [
+            pdf_convert.Page(
+                num=1,
+                text="普通加粗",
+                blocks=[
+                    pdf_convert.Block(
+                        "paragraph",
+                        text="普通加粗",
+                        runs=[pdf_convert.Run("普通"), pdf_convert.Run("加粗", bold=True)],
+                    )
+                ],
+            )
+        ]
+        pdf_convert.to_docx(pages, out)
+        doc = Document(out)
+        bold = [r.text for p in doc.paragraphs for r in p.runs if r.bold]
+        self.assertIn("加粗", bold)
+        self.assertNotIn("普通", bold)
+
+    def test_docx_table_becomes_real_table(self):
+        src = self.out("table.pdf")
+        make_table_fixture(src)
+        out = self.out("table.docx")
+        r = run_cli([src, out, "--format", "word"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = Document(out)
+        self.assertEqual(len(doc.tables), 1)
+        table = doc.tables[0]
+        self.assertEqual([c.text for c in table.rows[0].cells], ["姓名", "项目", "金额"])
+        self.assertEqual([c.text for c in table.rows[1].cells], ["张三", "差旅", "128.50"])
+        # 表内文字不应再作为普通段落重复输出
+        paras = "\n".join(p.text for p in doc.paragraphs)
+        self.assertNotIn("张三", paras)
+        # 表外标题仍保留
+        self.assertIn("报销明细", paras)
+
+    def test_docx_scanned_page_embeds_full_image(self):
+        src = self.out("scan.pdf")
+        make_scanned_fixture(src)
+        out = self.out("scan.docx")
+        r = run_cli([src, out, "--format", "word"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = Document(out)
+        self.assertEqual(len(doc.inline_shapes), 1, "扫描页应整页嵌入图片兜底")
 
     def test_xlsx(self):
         out = self.out("out.xlsx")
@@ -210,6 +326,29 @@ class PdfConvertTest(unittest.TestCase):
         ws = wb["第1页"]
         values = [c for row in ws.iter_rows(values_only=True) for c in row if c]
         self.assertIn("正文内容 第1页 含中文与 ASCII Line1-A", values)
+        # 文本工作表也做了可读性处理
+        self.assertEqual(ws.freeze_panes, "A2")
+        self.assertTrue(ws["A1"].alignment.wrap_text)
+
+    def test_xlsx_table_becomes_real_columns(self):
+        src = self.out("table2.pdf")
+        make_table_fixture(src)
+        out = self.out("table.xlsx")
+        r = run_cli([src, out, "--format", "excel"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        wb = load_workbook(out)
+        self.assertEqual(wb.sheetnames, ["第1页", "第1页-文本"])
+        ws = wb["第1页"]
+        self.assertEqual(ws["A1"].value, "姓名")
+        self.assertEqual(ws["B1"].value, "项目")
+        self.assertEqual(ws["C1"].value, "金额")
+        self.assertEqual(ws["A2"].value, "张三")
+        self.assertEqual(ws["C2"].value, "128.50")
+        self.assertEqual(ws["A3"].value, "李四")
+        self.assertTrue(ws["A1"].font.bold, "表头应加粗")
+        self.assertEqual(ws.freeze_panes, "A2")
+        # 表外文字进独立文本表,不与表格混在一起
+        self.assertIn("报销明细", [c for row in wb["第1页-文本"].iter_rows(values_only=True) for c in row if c])
 
     def test_pptx(self):
         out = self.out("out.pptx")
@@ -217,8 +356,91 @@ class PdfConvertTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         prs = Presentation(out)
         self.assertEqual(len(prs.slides), 3)
+        texts = "\n".join(
+            sh.text_frame.text for s in prs.slides for sh in s.shapes if getattr(sh, "has_text_frame", False)
+        )
+        self.assertIn("第 1 页 测试文档", texts)
+        self.assertIn("正文内容", texts)
         pictures = sum(1 for s in prs.slides for sh in s.shapes if sh.shape_type == 13)
-        self.assertEqual(pictures, 3)
+        self.assertEqual(pictures, 0, "文本页应输出可编辑文字,而不是整页图片")
+
+    def test_pptx_scanned_page_uses_full_image(self):
+        src = self.out("scan2.pdf")
+        make_scanned_fixture(src)
+        out = self.out("scan.pptx")
+        r = run_cli([src, out, "--format", "ppt"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        prs = Presentation(out)
+        self.assertEqual(len(prs.slides), 1)
+        pictures = sum(1 for s in prs.slides for sh in s.shapes if sh.shape_type == 13)
+        self.assertEqual(pictures, 1, "扫描页应有整页图片兜底")
+
+    def test_txt_collapses_blank_lines(self):
+        text = pdf_convert.to_txt([pdf_convert.Page(num=1, text="第一段\n\n\n\n第二段\n")])
+        self.assertEqual(text, "--- 第 1 页 ---\n第一段\n\n第二段")
+
+    def test_markdown_merges_wrapped_paragraph_lines(self):
+        block = {
+            "type": 0,
+            "bbox": (0, 0, 300, 40),
+            "lines": [
+                {"spans": [self._span(12.0, "This is a wrapped", bbox=(0, 0, 120, 14))], "bbox": (0, 0, 120, 14)},
+                {
+                    "spans": [self._span(12.0, "sentence for testing", bbox=(0, 16, 140, 30))],
+                    "bbox": (0, 16, 140, 30),
+                },
+            ],
+        }
+        md = pdf_convert.markdown_from_blocks([block])
+        self.assertIn("This is a wrapped sentence for testing", md)
+        self.assertEqual(md.count("This is a wrapped"), 1)
+
+    def test_markdown_table_syntax(self):
+        src = self.out("table3.pdf")
+        make_table_fixture(src)
+        out = self.out("table.md")
+        r = run_cli([src, out, "--format", "md"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(out, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("| 姓名 | 项目 | 金额 |", text)
+        self.assertIn("| --- | --- | --- |", text)
+        self.assertIn("| 张三 | 差旅 | 128.50 |", text)
+
+    def test_txt_table_is_tab_separated(self):
+        src = self.out("table4.pdf")
+        make_table_fixture(src)
+        out = self.out("table.txt")
+        r = run_cli([src, out, "--format", "txt"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(out, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("姓名\t项目\t金额", text)
+        self.assertIn("张三\t差旅\t128.50", text)
+
+    def test_repeated_header_footer_removed(self):
+        src = self.out("hdr.pdf")
+        make_header_footer_fixture(src)
+        pages = pdf_convert.extract_pages(src, render_images=False, keep_blocks=True)
+        self.assertEqual(len(pages), 3)
+        for p in pages:
+            self.assertNotIn("机密文档", p.text, "重复页眉/页码应被剔除")
+            self.assertIn(f"正文段落{p.num}", p.text)
+
+    def test_single_page_keeps_margin_text(self):
+        src = self.out("single-hdr.pdf")
+        make_header_footer_fixture(src, pages=1)
+        pages = pdf_convert.extract_pages(src, render_images=False, keep_blocks=True)
+        self.assertIn("机密文档", pages[0].text, "单页文档不判定页眉页脚,避免误删正文")
+
+    def test_render_resolution_is_sharper(self):
+        self.assertGreaterEqual(pdf_convert.RENDER_SCALE, 3.0)
+        out = self.out("sharp.png")
+        r = run_cli([self.pdf, out, "--page", "1"])
+        self.assertEqual(r.returncode, 0)
+        width, height = png_size(out)
+        self.assertGreaterEqual(width, 1500, "A4 页面 3x 渲染宽度应约 1785px")
+        self.assertGreater(height, width)
 
     def test_page_render(self):
         out = self.out("p2.png")
