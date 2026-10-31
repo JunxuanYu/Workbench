@@ -1,9 +1,9 @@
 {
   "name": "worklift-app",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "WorkLift 本地个人工作生活APP（v1.1 个人笔记 + 桃夭主题）",
+  "description": "WorkLift 本地个人工作生活APP（v1.2 工具箱扩展：Git 指南）",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
@@ -14,13 +14,13 @@
     "format:check": "prettier --check server.js public test eslint.config.js"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "express": "^5.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.11.0",
+    "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
-    "globals": "^17.12.0",
-    "prettier": "^3.9.9"
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10"
   }
 }
