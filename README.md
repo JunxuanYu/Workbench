@@ -28,9 +28,10 @@
 
 # 工具箱
 - 通用工具注册框架，按需扩展新工具
-- **PDF 转换**：PDF → Word / 图片 / Excel / PPT / TXT / Markdown（本机 Python 转换，产出真实格式，完全离线）
+- **PDF 转换**：PDF → Word / 图片 / Excel / PPT / TXT / Markdown（本机 Python 转换，产出真实格式，完全离线；Word / PPT 默认「保留原版式」，页面尺寸、文字位置、字号、颜色、图片与 PDF 一致，文字仍可编辑，也可关闭开关改为流式可编辑；同一文件可连续转换为多种格式，下载链接显示结果大小）
 - **Markdown 转换**：Markdown → PDF（标题/加粗/列表/表格/代码块等排版，中文正常，完全离线）
 - **JSON 转换**：格式化 / 压缩 / 校验 / 转 CSV / 转 YAML，可下载结果
+- **Git 使用指南**：9 大分类 52 条常用命令速查，支持搜索（如「撤销 提交」「rebase」）与分类过滤，一键复制到终端；危险命令红色警示
 
 # 账目计划
 - 按月记账，月份切换
@@ -54,7 +55,8 @@
 - 左侧栏底部「关闭工作台」按钮：关闭服务并退出
 
 ## 技术
-- Node.js + Express（仅一个 npm 依赖），原生 HTML/CSS/JS 单页应用
+- Node.js + Express v5（仅一个 npm 依赖），原生 HTML/CSS/JS 单页应用
+- 依赖管理：ESLint v10, Prettier v3, globals v17（已更新至次要版本）
 - PDF / Markdown 转换调用本机 Python（PyMuPDF 等）子进程：需要 Python 3.10+，首次运行 `start.bat` 会自动创建虚拟环境并联网安装依赖，之后完全离线可用，临时文件自动清理
 - 数据：单个 JSON 文件，变化即原子保存
 - 测试：`npm test`（node --test）+ `python -m unittest`（python/tests）
