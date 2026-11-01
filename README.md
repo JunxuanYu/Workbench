@@ -1,5 +1,7 @@
 # WorkLift — 个人工作台
 
+> 当前版本 **v1.2.1**（安全审计与加固）· 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+
 一个只给自己用的本地"工作 + 生活"管理工具：计划、开发项目、小工具、个人笔记、花钱、密码，全部记在一个文件中。
 双击 `start.bat` 运行，自动打开浏览器进入。数据保存在本机，断网可用。
 
@@ -59,5 +61,6 @@
 - 依赖管理：ESLint v10, Prettier v3, globals v17（已更新至次要版本）
 - PDF / Markdown 转换调用本机 Python（PyMuPDF 等）子进程：需要 Python 3.10+，首次运行 `start.bat` 会自动创建虚拟环境并联网安装依赖，之后完全离线可用，临时文件自动清理
 - 数据：单个 JSON 文件，变化即原子保存
-- 测试：`npm test`（node --test）+ `python -m unittest`（python/tests）
-- 详细架构与数据模型见 [docs/开发计划.md](docs/开发计划.md)，需求依据见 [docs/PRD.md](docs/PRD.md)，文档索引见 [docs/README.md](docs/README.md)
+- 安全基线：仅监听 `127.0.0.1`，Host / Origin / `Sec-Fetch-Site` 校验（防 DNS rebinding 与跨站请求），CSP 等安全响应头齐全；`/api/open` 只允许本机普通文件（拒绝 40 类可执行/脚本后缀、UNC 网络路径与真实路径伪装的链接）；PDF 渲染有像素预算，超大页面不会打爆内存
+- 测试：`npm test`（node --test）+ `python -m unittest`（python/tests），CI 见 `.github/workflows/ci.yml`
+- 详细架构与数据模型见 [docs/开发计划.md](docs/开发计划.md)，需求依据见 [docs/PRD.md](docs/PRD.md)，文档索引见 [docs/README.md](docs/README.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)

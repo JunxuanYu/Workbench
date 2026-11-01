@@ -8,6 +8,7 @@ python/.venv/
 .codegraph/
 .opencode/
 .playwright-mcp/
+.workbuddy/
 openspec/
 doc/
 .ruff_cache/
