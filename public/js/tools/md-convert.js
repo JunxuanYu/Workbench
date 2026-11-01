@@ -48,7 +48,7 @@ function renderMdConvert(container) {
   const textarea = document.createElement('textarea');
   textarea.placeholder = '在此粘贴 Markdown 文本，或选择上方 .md 文件导入…';
   textarea.style.cssText =
-    'width:100%;box-sizing:border-box;height:220px;font-size:13px;line-height:1.6;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg);color:var(--text);resize:vertical;font-family:inherit;';
+    'width:100%;box-sizing:border-box;height:220px;font-size:13px;line-height:1.6;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);resize:vertical;font-family:inherit;';
   container.append(textarea);
 
   // 状态区

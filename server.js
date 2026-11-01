@@ -56,6 +56,31 @@ function writeAtomic(filePath, data) {
   fs.renameSync(tmp, filePath);
 }
 
+// 确保临时目录存在（并发启动多个实例时 mkdir 递归不报错）
+function ensureDir(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+// 清理临时目录中的陈旧文件：只删「超过存活期」的遗留文件，
+// 保留其它实例正在使用的临时文件（旧实现启动即 rmtree，两个窗口会互相删掉转换中的文件）
+export function sweepStaleFiles(dir, maxAgeMs) {
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - maxAgeMs;
+  for (const name of names) {
+    const file = path.join(dir, name);
+    try {
+      if (fs.statSync(file).mtimeMs < cutoff) fs.rmSync(file, { force: true });
+    } catch {
+      /* 已被其它实例删除/正被占用，忽略 */
+    }
+  }
+}
+
 // 用系统默认程序打开本地文件/文件夹（供「关联文档」点击调用；浏览器禁止 http 页面直接跳 file://，由本机服务代为打开）
 function openWithOS(target) {
   if (process.platform === 'win32') {
@@ -203,8 +228,10 @@ function createDefaultPdfTool({ now, ttlMs } = {}) {
         throw new PdfHttpError(503, 'Python 环境未就绪，请运行 start.bat 完成环境安装');
       }
       const name = sanitizeFileName(originalName);
-      const file = path.join(PDF_TMP_DIR, `${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
-      fs.writeFileSync(file, buf);
+      // 临时文件名用 CSPRNG 生成（不可预测），并以 wx 独占创建：
+      // 即使目录内被预置同名符号链接，也不会顺带写到目录之外
+      const file = path.join(PDF_TMP_DIR, `${crypto.randomUUID()}.pdf`);
+      fs.writeFileSync(file, buf, { flag: 'wx' });
       let numPages;
       try {
         const meta = await runPdfCmd(venvPythonPath(), [PDF_CLI_PATH, file, '--check']);
@@ -219,14 +246,17 @@ function createDefaultPdfTool({ now, ttlMs } = {}) {
       const token = store.add({ file, originalName: name, numPages });
       return { token, numPages };
     },
-    async convert(token, format) {
+    async convert(token, format, { layout = false } = {}) {
       const fmt = PDF_FORMATS[format];
       if (!fmt) throw new PdfHttpError(400, '未知格式');
       const entry = store.get(token);
       if (!entry) throw new PdfHttpError(404, '会话不存在或已过期，请重新上传');
       const outFile = path.join(PDF_TMP_DIR, `${token}${fmt.ext}`);
+      const args = [PDF_CLI_PATH, entry.file, outFile, '--format', format];
+      // 仅 Word/PPT 支持原版式；其它格式忽略，避免把无效参数传给 Python
+      if (layout && (format === 'word' || format === 'ppt')) args.push('--layout');
       try {
-        await runPdfCmd(venvPythonPath(), [PDF_CLI_PATH, entry.file, outFile, '--format', format]);
+        await runPdfCmd(venvPythonPath(), args);
         const buffer = fs.readFileSync(outFile);
         return { buffer, baseName: entry.originalName.replace(/\.pdf$/i, ''), ext: fmt.ext, mime: fmt.mime };
       } catch (e) {
@@ -272,10 +302,10 @@ function createDefaultMdTool() {
         throw new PdfHttpError(503, 'Python 环境未就绪，请运行 start.bat 完成环境安装');
       }
       const name = sanitizeFileName(originalName || '文档.md').replace(/\.(md|markdown|txt)$/i, '') || '文档';
-      const tag = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const tag = crypto.randomUUID();
       const inFile = path.join(MD_TMP_DIR, `${tag}.md`);
       const outFile = path.join(MD_TMP_DIR, `${tag}.pdf`);
-      fs.writeFileSync(inFile, buf);
+      fs.writeFileSync(inFile, buf, { flag: 'wx' });
       try {
         await runPdfCmd(venvPythonPath(), [MD_CLI_PATH, inFile, outFile]);
         const buffer = fs.readFileSync(outFile);
@@ -300,6 +330,61 @@ const LOCAL_HOST_RE = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
 // Windows 下 /api/open 最终经 cmd start 打开；& | < > ^ % ( ) 会被 cmd 当成命令分隔/展开符。
 // 即使接口仅本机可用，也拒绝这些字符，避免「打开文档」升级为命令执行面。
 const WINDOWS_CMD_META_RE = /["&|<>^%()\r\n]/;
+
+// /api/open 的「可执行/脚本」拒绝清单。
+// cmd start 对下列扩展是「运行」而非「打开」，一旦放行即等于任意代码执行面。
+// 除常见可执行/脚本外，还覆盖 Windows 上少数以文档面貌出现的执行入口：
+//   .cpl 控制面板项、.msc 管理控制台、.chm 帮助文件、.scf 资源管理器命令、
+//   .settingcontent-ms 设置页、.diagcab 诊断包、.appx/.msix 应用包、.reg/.inf 注册表与驱动安装
+export const BLOCKED_OPEN_EXT_RE =
+  /\.(?:bat|cmd|com|exe|scr|pif|msi|msp|msc|cpl|chm|hta|lnk|scf|js|jse|vbs|vbe|vb|ws|wsf|wsh|wsc|ps1|psm1|psd1|ps1xml|pssc|cdxml|jar|jnlp|application|appref-ms|gadget|settingcontent-ms|diagcab|appx|appxbundle|msix|msixbundle|reg|inf)$/i;
+
+// 判定「打开本地路径」请求是否安全。纯逻辑 + 可注入 fs，便于单元测试。
+// 返回 { ok, target } 或 { ok:false, status, error }
+export function inspectOpenTarget(
+  rawPath,
+  { platform = process.platform, statSync = fs.statSync, realpathSync = fs.realpathSync } = {},
+) {
+  const p = typeof rawPath === 'string' ? rawPath.trim() : '';
+  if (!p) return { ok: false, status: 400, error: '缺少要打开的本地路径' };
+  if (platform === 'win32' && WINDOWS_CMD_META_RE.test(p)) {
+    return { ok: false, status: 400, error: '路径包含 Windows 命令特殊字符，已拒绝' };
+  }
+  // 拒绝 UNC 网络路径（\\server\share 或 //server/share）：会触发系统向远程 SMB 共享发起
+  // 认证握手（NetNTLM 泄露），本工具仅面向本机文件/文件夹
+  if (/^(\\\\|\/\/)/.test(p)) return { ok: false, status: 400, error: '不支持网络路径（UNC）' };
+
+  let st;
+  try {
+    st = statSync(p);
+  } catch {
+    return { ok: false, status: 404, error: `本地路径不存在：${p}` };
+  }
+  if (!st.isFile() && !st.isDirectory()) return { ok: false, status: 400, error: '路径既不是文件也不是文件夹' };
+  if (!st.isFile()) return { ok: true, target: p };
+
+  // 目录可直接打开；文件需按「请求路径」与「真实路径」双份校验：
+  // 符号链接/硬链接可让 notes.txt 实际指向 evil.exe，只看后缀会被绕过
+  let real = p;
+  try {
+    real = realpathSync(p);
+  } catch {
+    /* 解析失败时沿用原路径（仍需通过后缀校验） */
+  }
+  if (BLOCKED_OPEN_EXT_RE.test(p) || BLOCKED_OPEN_EXT_RE.test(real)) {
+    return { ok: false, status: 400, error: '不支持打开可执行/脚本文件' };
+  }
+  return { ok: true, target: real };
+}
+
+// RFC 5987 附件名编码：encodeURIComponent 不转义 ' ( ) * !，需补齐，避免响应头解析歧义
+export function contentDispositionAttachment(fileName) {
+  const encoded = encodeURIComponent(String(fileName)).replace(
+    /['()*!]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename*=UTF-8''${encoded}`;
+}
 const CSP_VALUE =
   "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
   "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
@@ -319,6 +404,7 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
     next();
   });
 
@@ -353,8 +439,8 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
   // PDF 转换后端：默认走本机 Python；测试可注入 mock opts.pdfTool（注入时不建临时目录、不起清扫定时器）
   const pdfTool = opts.pdfTool || createDefaultPdfTool({ now: opts.now, ttlMs: opts.ttlMs });
   if (!opts.pdfTool) {
-    fs.rmSync(PDF_TMP_DIR, { recursive: true, force: true });
-    fs.mkdirSync(PDF_TMP_DIR, { recursive: true });
+    ensureDir(PDF_TMP_DIR);
+    sweepStaleFiles(PDF_TMP_DIR, PDF_TOKEN_TTL_MS);
     const pdfInterval = setInterval(() => {
       try {
         pdfTool.cleanup();
@@ -368,8 +454,8 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
   // Markdown 转换后端：默认走本机 Python；测试可注入 mock opts.mdTool（注入时不建临时目录）
   const mdTool = opts.mdTool || createDefaultMdTool();
   if (!opts.mdTool) {
-    fs.rmSync(MD_TMP_DIR, { recursive: true, force: true });
-    fs.mkdirSync(MD_TMP_DIR, { recursive: true });
+    ensureDir(MD_TMP_DIR);
+    sweepStaleFiles(MD_TMP_DIR, PDF_TOKEN_TTL_MS);
   }
 
   app.use(express.static(PUBLIC_DIR));
@@ -411,7 +497,7 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
       const data = readData(dataFile);
       const name = `WorkLift备份-${localDateStr(new Date())}.json`;
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
+      res.setHeader('Content-Disposition', contentDispositionAttachment(name));
       res.send(JSON.stringify(data, null, 2));
     } catch {
       res.status(500).json({ error: '备份失败' });
@@ -431,29 +517,10 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
   // 打开本地文件/文件夹。仅接受 application/json 的 POST：
   // 浏览器会拦截跨站 JSON POST（需预检通过），外部网页无法借 <img>/<form> 等简单请求诱导打开任意文件
   app.post('/api/open', (req, res) => {
-    const p = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
-    if (!p) return res.status(400).json({ error: '缺少要打开的本地路径' });
-    if (process.platform === 'win32' && WINDOWS_CMD_META_RE.test(p)) {
-      return res.status(400).json({ error: '路径包含 Windows 命令特殊字符，已拒绝' });
-    }
-    // 拒绝 UNC 网络路径（\\server\share 或 //server/share）：会触发系统向远程 SMB 共享发起
-    // 认证握手（NetNTLM 泄露），本工具仅面向本机文件/文件夹
-    if (/^(\\\\|\/\/)/.test(p)) return res.status(400).json({ error: '不支持网络路径（UNC）' });
+    const check = inspectOpenTarget(req.body?.path);
+    if (!check.ok) return res.status(check.status).json({ error: check.error });
     try {
-      const st = fs.statSync(p);
-      if (!st.isFile() && !st.isDirectory()) return res.status(400).json({ error: '路径既不是文件也不是文件夹' });
-      // 拒绝可执行/脚本文件：cmd start 会执行 .bat/.exe/.js/.hta/.lnk 等而非仅打开，
-      // 避免「打开关联文档」升级为任意代码执行面
-      if (
-        st.isFile() &&
-        /\.(bat|cmd|com|exe|scr|js|jse|vbs|vbe|wsf|wsh|hta|lnk|pif|msi|msp|ps1|psm1|psd1|jar|reg|appref-ms)$/i.test(p)
-      )
-        return res.status(400).json({ error: '不支持打开可执行/脚本文件' });
-    } catch {
-      return res.status(404).json({ error: `本地路径不存在：${p}` });
-    }
-    try {
-      openWithOS(p);
+      openWithOS(check.target);
       res.json({ ok: true });
     } catch {
       res.status(500).json({ error: '调用系统程序打开失败' });
@@ -481,9 +548,10 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
     try {
       const token = typeof req.query.token === 'string' ? req.query.token : '';
       const format = typeof req.query.format === 'string' ? req.query.format : '';
-      const { buffer, baseName, ext, mime } = await pdfTool.convert(token, format);
+      const layout = req.query.layout === '1' || req.query.layout === 'true';
+      const { buffer, baseName, ext, mime } = await pdfTool.convert(token, format, { layout });
       res.setHeader('Content-Type', mime);
-      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(baseName + ext)}`);
+      res.setHeader('Content-Disposition', contentDispositionAttachment(baseName + ext));
       res.send(buffer);
     } catch (e) {
       sendToolError(res, e, '转换失败');
@@ -514,7 +582,7 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
         const name = typeof req.query.name === 'string' ? req.query.name : '文档.md';
         const { buffer, baseName, ext, mime } = await mdTool.convert(req.body, name);
         res.setHeader('Content-Type', mime);
-        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(baseName + ext)}`);
+        res.setHeader('Content-Disposition', contentDispositionAttachment(baseName + ext));
         res.send(buffer);
       } catch (e) {
         sendToolError(res, e, '转换失败');
@@ -523,11 +591,13 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
   );
 
   // 请求体解析错误统一转 JSON：413 超限 / 400 格式错误
+  // 5xx 不回显内部错误文本（可能含堆栈/路径），统一对外文案，细节留在服务端
   // eslint-disable-next-line no-unused-vars -- Express 错误中间件按 4 参签名识别，next 必须保留
   app.use((err, req, res, next) => {
     if (err?.type === 'entity.too.large') return res.status(413).json({ error: '文件过大，超出上传上限' });
     if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: '请求体解析失败' });
-    res.status(err?.status || 500).json({ error: err?.message || '服务器错误' });
+    const status = err?.status && err.status < 500 ? err.status : 500;
+    res.status(status).json({ error: status === 500 ? '服务器内部错误' : err?.message || '请求无效' });
   });
 
   return app;

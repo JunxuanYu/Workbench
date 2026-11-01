@@ -118,7 +118,7 @@ export async function render(container) {
       const closed = isProjectClosed(p);
       item.style.cssText =
         'cursor:grab;' +
-        (p.id === selectedId ? 'border-color:var(--accent);background:#eef1fe;' : '') +
+        (p.id === selectedId ? 'border-color:var(--accent);background:var(--nav-active);' : '') +
         (closed ? ';opacity:0.5;filter:grayscale(100%);' : '');
       item.draggable = !closed; // 已结项不可拖拽重排，始终置于底部
       item.dataset.projectId = p.id;

@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Callable, Iterator, Literal
+from xml.sax.saxutils import escape
 
 import pymupdf as fitz  # 官方导入名;fitz 别名会触发弃用警告污染 stdout
 
@@ -40,13 +41,17 @@ import pymupdf as fitz  # 官方导入名;fitz 别名会触发弃用警告污染
 
 RENDER_SCALE = 3.0  # 图片导出/预览渲染倍率(A4 约 1785×2526,≈216 DPI)
 EMBED_SCALE = 2.0  # 文档内嵌整页图(扫描件兜底)倍率,控制文件体积
+# 单页渲染像素上限:恶意/异常 PDF 可声明上万点的超大 MediaBox,按固定倍率渲染会申请数十 GB
+# 内存并把进程拖死(本地拒绝服务)。改为按像素预算动态降倍率,正常 A4(≈4.5MP)不受影响。
+MAX_RENDER_PIXELS = 30_000_000
+MIN_RENDER_SCALE = 0.05  # 降采样下限,极端页面仍能产出可辨识缩略图
 FORMATS = ("word", "excel", "ppt", "image", "txt", "md")
 
 DEFAULT_FONT_SIZE = 12.0
 
-# 标题判定:字号 / 正文中位字号 的比值阈值,必须按从大到小排列
-HEADING_RATIOS: tuple[tuple[float, int], ...] = ((1.6, 1), (1.35, 2), (1.15, 3))
-HEADING_MARK_MAX = 6
+# 标题判定:字号 ≥ 正文中位字号 × 该比值才视为标题
+HEADING_MIN_RATIO = 1.15
+HEADING_MARK_MAX = 6  # Markdown 最多支持 6 级标题
 
 # 文本拼接
 BULLET_CHARS = "\u2022\u00b7\uf0b7"  # • · 等常见项目符号
@@ -57,6 +62,17 @@ SPAN_GAP_RATIO = 0.4  # 同行 span 间距 > 字号×0.4 视为词间空格
 LINK_OVERLAP_RATIO = 0.5  # span 与链接矩形重叠 ≥50% 视为链接文字
 LINE_GAP_RATIO = 0.9  # 行距 > 行高×0.9 视为新段落
 MIN_LINE_HEIGHT_RATIO = 0.8
+
+# 跨文本块合并(部分 PDF 每行/每段各占一个 block)
+LINE_MERGE_GAP_RATIO = 0.8  # 块间垂直间距 ≤ 字号×1.2×该系数 视为同一段
+LINE_MERGE_SIZE_TOLERANCE = 1.0  # 字号差超过该值不合并(避免标题串到正文)
+LIST_CONTINUATION_TOLERANCE = 0.5  # 列表续行与列表符号的左边界容差(×字号)
+
+# 段落对齐推断(基于行 bbox 与页面宽度)
+CENTERED_MAX_WIDTH_RATIO = 0.85  # 超过该宽度不可能是居中标题
+CENTERED_TOLERANCE_RATIO = 0.04  # 左右留白差 ≤ 页宽×该比例 视为居中
+RIGHT_ALIGN_LEFT_RATIO = 0.55  # 右对齐:左留白 ≥ 页宽×该比例
+RIGHT_ALIGN_RIGHT_RATIO = 0.08  # 且右留白 ≤ 页宽×该比例
 
 # PyMuPDF span flags 位
 BOLD_FLAG = 1 << 4
@@ -79,10 +95,11 @@ DOCX_BODY_FONT = "Microsoft YaHei"
 DOCX_MONO_FONT = "Consolas"
 DOCX_TEXT_WIDTH_INCHES = 6.5  # 整页图兜底宽度
 DOCX_IMAGE_MAX_INCHES = 5.5  # 正文图片最大宽度
-DOCX_IMAGE_MIN_RATIO = 0.2  # 小图最小占正文宽度比例
+DOCX_IMAGE_MIN_INCHES = 0.3  # 极小图最小宽度,避免缩成不可见
 DOCX_TABLE_FONT_PT = 10
 DOCX_BODY_SPACE_AFTER_PT = 4
 DOCX_HEADING_MAX_LEVEL = 4
+DOCX_PT_PER_INCH = 72.0  # PDF 点 -> 英寸
 
 # Excel
 SHEET_NAME_MAX_LEN = 31
@@ -94,6 +111,8 @@ XLSX_COL_WIDTH_FACTOR = 1.6
 XLSX_COL_WIDTH_PAD = 2
 XLSX_HEADER_FILL = "F2EDE7"
 XLSX_EMPTY_SHEET = "空文档"
+NUMERIC_CELL_RE = re.compile(r"^(?P<sign>-)?(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?P<frac>\.\d+)?$")
+CURRENCY_SYMBOLS = "¥$€£"
 
 # PPT
 PPTX_SLIDE_WIDTH_IN = 13.333
@@ -103,6 +122,12 @@ PPTX_ITEM_PT = 18
 PPTX_ITEM_SMALL_PT = 15
 PPTX_ITEM_SMALL_THRESHOLD = 60  # 超过该字符数的要点用小一号字
 PPTX_MAX_ITEMS = 20
+
+# 原版式输出(Word/PPT):背景保留原始图形与图片,只把文字抽成绝对定位文本框
+LAYOUT_BG_SCALE = 2.0
+LAYOUT_BG_JPEG_QUALITY = 90
+LAYOUT_BOX_MIN_PT = 1.0
+LAYOUT_PAGE_SIZE_TOLERANCE_PT = 1.0
 
 
 # ---------- 错误与数据模型 ----------
@@ -119,13 +144,15 @@ BBox = tuple[float, float, float, float]
 
 @dataclass
 class Run:
-    """一段同格式文本(粗体/斜体/等宽/超链接)。"""
+    """一段同格式文本(粗体/斜体/等宽/超链接/字号/颜色)。"""
 
     text: str
     bold: bool = False
     italic: bool = False
     mono: bool = False
     link: str | None = None
+    size: float = 0.0  # PDF 原始字号(pt),0 表示未知
+    color: tuple[int, int, int] | None = None
 
 
 @dataclass
@@ -140,6 +167,8 @@ class Block:
     image: bytes | None = None
     bbox: BBox = (0.0, 0.0, 0.0, 0.0)
     ordered: bool = False
+    size: float = 0.0  # 标题/图片块的代表字号(pt)
+    align: str = "left"  # 推断的段落对齐:left / center / right
 
 
 @dataclass
@@ -189,9 +218,13 @@ def _join_text(left: str, right: str) -> str:
 
 def _needs_space(left: str, right: str) -> bool:
     """折行拼接处是否需要一个空格(与 _join_text 的判定保持一致)。"""
-    left, right = (left or "").rstrip(), (right or "").lstrip()
-    if not left or not right:
+    left, right = left or "", right or ""
+    # 原文已带空格时不再补,避免 "and  offline" 这类双空格
+    if not left.strip() or not right.strip():
         return False
+    if left[-1].isspace() or right[0].isspace():
+        return False
+    left, right = left.rstrip(), right.lstrip()
     return _join_text(left, right) == left + " " + right
 
 
@@ -248,27 +281,41 @@ def _span_gap(span: dict, next_span: dict) -> float:
         return 0.0
 
 
+def _int_to_rgb(value) -> tuple[int, int, int] | None:
+    """PyMuPDF 的 sRGB 整数(0xRRGGBB) -> (r, g, b);非法值返回 None。"""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return ((number >> 16) & 0xFF, (number >> 8) & 0xFF, number & 0xFF)
+
+
 def _span_runs(spans: list[dict], link_targets: list[tuple[fitz.Rect, str]]) -> list[Run]:
-    """一行 span -> Run 列表:保留粗体/斜体/等宽/链接,并按视觉间隙补空格。"""
+    """一行 span -> Run 列表:保留粗体/斜体/等宽/字号/颜色/链接,并按视觉间隙补空格。"""
     runs: list[Run] = []
     for index, span in enumerate(spans):
         text = span.get("text", "")
         if not text:
             continue
         flags = span.get("flags", 0) or 0
+        size = float(span.get("size", DEFAULT_FONT_SIZE) or DEFAULT_FONT_SIZE)
         run = Run(
             text,
             bold=bool(flags & BOLD_FLAG),
             italic=bool(flags & ITALIC_FLAG),
             mono=bool(flags & MONO_FLAG),
+            size=size,
+            color=_int_to_rgb(span.get("color")) if "color" in span else None,
         )
         rect = _safe_rect(span.get("bbox"))
         if rect is not None:
             run.link = _link_for(rect, link_targets)
         runs.append(run)
         if index + 1 < len(spans):
-            size = float(span.get("size", DEFAULT_FONT_SIZE) or DEFAULT_FONT_SIZE)
-            if _span_gap(span, spans[index + 1]) > size * SPAN_GAP_RATIO:
+            next_text = spans[index + 1].get("text", "") or ""
+            if _span_gap(span, spans[index + 1]) > size * SPAN_GAP_RATIO and not (
+                text[-1:].isspace() or next_text[:1].isspace()
+            ):
                 runs.append(Run(" "))
     return runs
 
@@ -296,7 +343,11 @@ def _render_inline(runs: list[Run]) -> str:
 
 
 def _body_font_size(raw_blocks: list[dict]) -> float:
-    """正文中位字号:按字符数加权取最常见字号,无文本时回退 12pt。"""
+    """正文中位字号:按字符数加权,并在接近高频的字号中取最小值。
+
+    短文档里标题字数可能接近正文,只取「最常见字号」会把 22pt 标题误判为正文,
+    进而把 16pt 小节误判成列表;取高频字号中的最小值可稳定落在正文上。
+    """
     sizes: Counter[float] = Counter()
     for block in raw_blocks:
         if block.get("type") != 0:
@@ -309,18 +360,9 @@ def _body_font_size(raw_blocks: list[dict]) -> float:
                     sizes[round(size, 1)] += len(text)
     if not sizes:
         return DEFAULT_FONT_SIZE
-    return sizes.most_common(1)[0][0]
-
-
-def _heading_level(size: float, body_size: float) -> int:
-    """按字号比给出标题级别:阈值从大到小匹配,首个命中即返回。"""
-    if not body_size:
-        return HEADING_RATIOS[-1][1]
-    ratio = size / body_size
-    for threshold, level in HEADING_RATIOS:
-        if ratio >= threshold:
-            return level
-    return HEADING_RATIOS[-1][1]
+    maximum = max(sizes.values())
+    candidates = [size for size, count in sizes.items() if count >= maximum * 0.5]
+    return min(candidates)
 
 
 def _strip_list_marker(text: str) -> str:
@@ -346,7 +388,17 @@ def _strip_marker_runs(runs: list[Run]) -> list[Run]:
             continue
         stripped = True
         if without_marker:
-            out.append(Run(without_marker, run.bold, run.italic, run.mono, run.link))
+            out.append(
+                Run(
+                    without_marker,
+                    bold=run.bold,
+                    italic=run.italic,
+                    mono=run.mono,
+                    link=run.link,
+                    size=run.size,
+                    color=run.color,
+                )
+            )
     return out
 
 
@@ -396,15 +448,15 @@ def _blocks_from_text_block(raw: dict, body_size: float, link_targets: list[tupl
         first = text.lstrip()
         ordered = bool(LIST_NUMBER_RE.match(first)) and first[:1] not in BULLET_CHARS
 
-        if body_size and size >= body_size * HEADING_RATIOS[-1][0]:
+        if body_size and size >= body_size * HEADING_MIN_RATIO:
             flush()
             blocks.append(
                 Block(
                     "heading",
                     text=text.strip(),
-                    level=_heading_level(size, body_size),
                     runs=runs,
                     bbox=bbox,
+                    size=size,
                 )
             )
             continue
@@ -428,6 +480,93 @@ def _blocks_from_text_block(raw: dict, body_size: float, link_targets: list[tupl
 
 def _image_block(raw: dict) -> Block:
     return Block("image", image=raw.get("image"), bbox=_rect_tuple(raw.get("bbox")))
+
+
+# ---------- 版面后处理(合并 / 层级 / 对齐) ----------
+
+
+def _block_font_size(block: Block) -> float:
+    """块内最大字号;0 表示未知(合成数据或图片块)。"""
+    sizes = [run.size for run in block.runs if run.size > 0]
+    return max(sizes) if sizes else 0.0
+
+
+def _apply_heading_levels(blocks: list[Block]) -> None:
+    """按字号从大到小排名分配标题级别:最大字号 = 1 级。
+
+    比固定比值阈值更贴近真实文档:22pt/16pt/14pt 会稳定输出 1/2/3 级,
+    而不是把 16pt 硬压成 4 级。
+    """
+    sizes = sorted({round(block.size, 1) for block in blocks if block.kind == "heading" and block.size > 0}, reverse=True)
+    rank = {size: index + 1 for index, size in enumerate(sizes)}
+    for block in blocks:
+        if block.kind == "heading":
+            block.level = min(rank.get(round(block.size, 1), 1), HEADING_MARK_MAX)
+
+
+def _apply_alignment(blocks: list[Block], width: float) -> None:
+    """根据 bbox 左右留白推断对齐方式(居中标题 / 右对齐落款 / 默认左对齐)。"""
+    if width <= 0:
+        return
+    for block in blocks:
+        if block.kind not in ("heading", "paragraph", "list"):
+            continue
+        x0, _, x1, _ = block.bbox
+        left, right, span = x0, width - x1, x1 - x0
+        if span <= 0:
+            continue
+        if span < width * CENTERED_MAX_WIDTH_RATIO and abs(left - right) <= width * CENTERED_TOLERANCE_RATIO:
+            block.align = "center"
+        elif left >= width * RIGHT_ALIGN_LEFT_RATIO and right <= width * RIGHT_ALIGN_RIGHT_RATIO:
+            block.align = "right"
+
+
+def _can_merge_blocks(previous: Block, current: Block) -> bool:
+    """相邻块是否应合并:同字号、垂直间距小、水平方向属于同一栏。"""
+    if current.kind != "paragraph" or previous.kind not in ("paragraph", "list"):
+        return False
+    previous_size = _block_font_size(previous)
+    current_size = _block_font_size(current)
+    if previous_size and current_size and abs(previous_size - current_size) > LINE_MERGE_SIZE_TOLERANCE:
+        return False
+    size = previous_size or current_size or DEFAULT_FONT_SIZE
+    gap = current.bbox[1] - previous.bbox[3]
+    if gap < -size or gap > size * 1.2 * LINE_MERGE_GAP_RATIO:
+        return False
+    if current.bbox[0] > previous.bbox[2] + size * 0.5:  # 起始点已越过上一行右边缘:多半是新栏/右栏
+        return False
+    if previous.kind == "list" and current.bbox[0] < previous.bbox[0] - size * LIST_CONTINUATION_TOLERANCE:
+        return False
+    return True
+
+
+def _merge_blocks_into(previous: Block, current: Block) -> None:
+    """把 current 的文本/样式并入 previous(保持 previous 的类型与列表属性)。"""
+    joiner = " " if _needs_space(previous.text, current.text) else ""
+    if previous.runs or current.runs:
+        if joiner:
+            previous.runs.append(Run(" "))
+        previous.runs.extend(current.runs)
+        previous.text = _run_text(previous.runs).strip()
+    else:
+        previous.text = f"{previous.text}{joiner}{current.text}".strip()
+    previous.bbox = (
+        min(previous.bbox[0], current.bbox[0]),
+        previous.bbox[1],
+        max(previous.bbox[2], current.bbox[2]),
+        current.bbox[3],
+    )
+
+
+def _merge_continuous_blocks(blocks: list[Block]) -> list[Block]:
+    """合并被 PDF 拆成多个 block 的同一段落/列表续行(常见于逐行插入的文本)。"""
+    merged: list[Block] = []
+    for block in blocks:
+        if merged and _can_merge_blocks(merged[-1], block):
+            _merge_blocks_into(merged[-1], block)
+        else:
+            merged.append(block)
+    return merged
 
 
 def _parse_raw_blocks(raw_blocks: list[dict], links=None) -> list[Block]:
@@ -504,6 +643,9 @@ def _extract_blocks(page: fitz.Page) -> list[Block]:
             if block.kind == "table" or not any(_center_inside(block.bbox, table.bbox) for table in tables)
         ]
     blocks.sort(key=lambda block: (round(block.bbox[1], 1), round(block.bbox[0], 1)))
+    blocks = _merge_continuous_blocks(blocks)
+    _apply_heading_levels(blocks)
+    _apply_alignment(blocks, float(page.rect.width))
     return blocks
 
 
@@ -528,25 +670,24 @@ def _margin_key(text: str) -> str:
 
 
 def _strip_running_headers(pages: list[Page]) -> None:
-    """剔除页眉/页脚:页边区域内重复出现的文本与纯页码(仅多页文档)。"""
-    if len(pages) < 2:
-        return
-
-    counts: Counter[str] = Counter()
-    for page in pages:
-        if page.height <= 0:
-            continue
-        seen = set()
-        for block in page.blocks:
-            if block.kind == "image" or not _in_margin(block.bbox, page.height):
+    """剔除页眉/页脚:多页文档剔除页边重复文本;纯页码在任意页数都剔除。"""
+    repeated: set[str] = set()
+    if len(pages) >= 2:
+        counts: Counter[str] = Counter()
+        for page in pages:
+            if page.height <= 0:
                 continue
-            key = _margin_key(block.text)
-            if key and key not in seen:
-                seen.add(key)
-                counts[key] += 1
+            seen = set()
+            for block in page.blocks:
+                if block.kind == "image" or not _in_margin(block.bbox, page.height):
+                    continue
+                key = _margin_key(block.text)
+                if key and key not in seen:
+                    seen.add(key)
+                    counts[key] += 1
 
-    threshold = max(2, math.ceil(len(pages) * REPEAT_PAGE_RATIO))
-    repeated = {key for key, count in counts.items() if count >= threshold}
+        threshold = max(2, math.ceil(len(pages) * REPEAT_PAGE_RATIO))
+        repeated = {key for key, count in counts.items() if count >= threshold}
 
     for page in pages:
         if page.height <= 0:
@@ -579,8 +720,24 @@ def _open_pdf(path: str) -> Iterator[fitz.Document]:
         doc.close()
 
 
+def _render_scale(rect, scale: float, max_pixels: int | None = None) -> float:
+    """按像素预算收敛渲染倍率。
+
+    超大页面按 sqrt(预算/面积) 降采样,保证单页像素数 ≤ max_pixels,
+    避免 page.get_pixmap 一次性申请巨量内存;正常页面返回原倍率(行为不变)。
+    """
+    budget_pixels = MAX_RENDER_PIXELS if max_pixels is None else max_pixels
+    width = max(float(rect.width), 1.0)
+    height = max(float(rect.height), 1.0)
+    if budget_pixels <= 0:
+        return scale
+    budget_scale = math.sqrt(budget_pixels / (width * height))
+    return max(min(scale, budget_scale), MIN_RENDER_SCALE)
+
+
 def _render_png(page: fitz.Page, scale: float) -> bytes:
-    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+    effective = _render_scale(page.rect, scale)
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(effective, effective))
     return pixmap.tobytes("png")
 
 
@@ -639,6 +796,8 @@ def extract_pages(
 
     if keep_blocks:
         _strip_running_headers(pages)
+        # 标题级别必须在整份文档范围内排名,否则只有单一字号的页面会把小节误判为一级标题
+        _apply_heading_levels([block for page in pages for block in page.blocks])
         for page in pages:
             page.text = _blocks_to_text(page.blocks)
     return pages
@@ -649,7 +808,9 @@ def render_page(path: str, n: int, out_path: str, scale: float = RENDER_SCALE) -
     with _open_pdf(path) as doc:
         if n < 1 or n > len(doc):
             raise PdfError(f"页号超出范围: {n} (共 {len(doc)} 页)")
-        doc[n - 1].get_pixmap(matrix=fitz.Matrix(scale, scale)).save(out_path)
+        page = doc[n - 1]
+        effective = _render_scale(page.rect, scale)
+        page.get_pixmap(matrix=fitz.Matrix(effective, effective)).save(out_path)
 
 
 # ---------- TXT ----------
@@ -751,7 +912,9 @@ def _render_markdown_blocks(blocks: list[Block], image_fn: Callable[[Block], str
 
 def markdown_from_blocks(blocks: list[dict], links=None, image_fn=None) -> str:
     """`page.get_text("dict")["blocks"]` -> 该页 markdown(不含分页标记)。"""
-    return _render_markdown_blocks(_parse_raw_blocks(blocks, links), image_fn)
+    parsed = _parse_raw_blocks(blocks, links)
+    _apply_heading_levels(parsed)
+    return _render_markdown_blocks(parsed, image_fn)
 
 
 def _markdown_document(path: str) -> tuple[str, int]:
@@ -770,6 +933,7 @@ def _markdown_document(path: str) -> tuple[str, int]:
                 )
             )
         _strip_running_headers(pages)
+        _apply_heading_levels([block for page in pages for block in page.blocks])
 
         chunks = []
         for page_info in pages:
@@ -820,6 +984,9 @@ def _docx_set_default_font(doc) -> None:
 
 
 def _docx_add_runs(paragraph, runs: list[Run]) -> None:
+    """按 run 写入文本,并尽量保留原文的字号与颜色。"""
+    from docx.shared import Pt, RGBColor
+
     for run in runs:
         if not run.text:
             continue
@@ -830,6 +997,36 @@ def _docx_add_runs(paragraph, runs: list[Run]) -> None:
             target.italic = True
         if run.mono:
             target.font.name = DOCX_MONO_FONT
+        if run.size > 0:
+            target.font.size = Pt(run.size)
+        if run.color:
+            target.font.color.rgb = RGBColor(*run.color)
+
+
+def _docx_set_alignment(paragraph, align: str) -> None:
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    mapping = {
+        "center": WD_ALIGN_PARAGRAPH.CENTER,
+        "right": WD_ALIGN_PARAGRAPH.RIGHT,
+        "left": WD_ALIGN_PARAGRAPH.LEFT,
+    }
+    if align in mapping:
+        paragraph.alignment = mapping[align]
+
+
+def _docx_add_text_paragraph(doc, block: Block, style: str | None = None):
+    """写一个带 run 样式与对齐的段落;style 缺失时退回 Normal。"""
+    try:
+        paragraph = doc.add_paragraph(style=style) if style else doc.add_paragraph()
+    except KeyError:  # 模板缺少样式时退回默认段落
+        paragraph = doc.add_paragraph()
+    if block.runs:
+        _docx_add_runs(paragraph, block.runs)
+    if not paragraph.runs:
+        paragraph.add_run(block.text)
+    _docx_set_alignment(paragraph, block.align)
+    return paragraph
 
 
 def _docx_add_table(doc, rows: list[list[str]]) -> None:
@@ -863,29 +1060,35 @@ def _docx_add_picture(doc, data: bytes, width_inches: float) -> None:
 def _docx_add_inline_image(doc, block: Block, page: Page) -> None:
     if not block.image:
         return
-    ratio = 1.0
-    if page.width > 0:
-        ratio = min(1.0, max(DOCX_IMAGE_MIN_RATIO, (block.bbox[2] - block.bbox[0]) / page.width))
-    _docx_add_picture(doc, block.image, DOCX_IMAGE_MAX_INCHES * ratio)
+    width_pt = max(block.bbox[2] - block.bbox[0], 0.0)
+    if width_pt <= 0 and page.width > 0:
+        width_pt = page.width
+    # 按 PDF 中的真实宽度换算英寸,而不是固定占正文宽度的比例(避免小图被继续缩小)
+    width_inches = min(DOCX_IMAGE_MAX_INCHES, max(DOCX_IMAGE_MIN_INCHES, width_pt / DOCX_PT_PER_INCH))
+    _docx_add_picture(doc, block.image, width_inches)
 
 
 def _docx_write_block(doc, block: Block, page: Page) -> None:
     from docx.shared import Pt
 
     if block.kind == "heading":
-        doc.add_heading(block.text, level=min(block.level + 1, DOCX_HEADING_MAX_LEVEL))
+        level = min(max(block.level, 1), DOCX_HEADING_MAX_LEVEL)
+        _docx_add_text_paragraph(doc, block, style=f"Heading {level}")
     elif block.kind == "paragraph":
-        paragraph = doc.add_paragraph()
-        if block.runs:
-            _docx_add_runs(paragraph, block.runs)
-        else:
-            paragraph.add_run(block.text)
+        paragraph = _docx_add_text_paragraph(doc, block)
         paragraph.paragraph_format.space_after = Pt(DOCX_BODY_SPACE_AFTER_PT)
     elif block.kind == "list":
+        style = "List Number" if block.ordered else "List Bullet"
         try:
-            doc.add_paragraph(block.text, style="List Number" if block.ordered else "List Bullet")
+            paragraph = doc.add_paragraph(style=style)
         except KeyError:  # 模板缺少列表样式时降级为手写符号
-            doc.add_paragraph(("1. " if block.ordered else "- ") + block.text)
+            paragraph = doc.add_paragraph(("1. " if block.ordered else "- ") + block.text)
+        else:
+            if block.runs:
+                _docx_add_runs(paragraph, block.runs)
+            if not paragraph.runs:
+                paragraph.add_run(block.text)
+        _docx_set_alignment(paragraph, block.align)
     elif block.kind == "table":
         _docx_add_table(doc, block.rows)
         doc.add_paragraph("")
@@ -893,14 +1096,31 @@ def _docx_write_block(doc, block: Block, page: Page) -> None:
         _docx_add_inline_image(doc, block, page)
 
 
+def _docx_set_page_size(doc, pages: list[Page]) -> None:
+    """页面尺寸跟随 PDF 首页(A4/Letter),避免默认 Letter 导致版式偏移。"""
+    from docx.shared import Inches
+
+    for page in pages:
+        if page.width > 0 and page.height > 0:
+            section = doc.sections[0]
+            section.page_width = Inches(page.width / DOCX_PT_PER_INCH)
+            section.page_height = Inches(page.height / DOCX_PT_PER_INCH)
+            return
+
+
 def to_docx(pages: list[Page], out_path: str) -> None:
-    """Word:可编辑结构化正文(标题/段落/列表/表格);仅扫描页嵌入整页图。"""
+    """Word:可编辑结构化正文(标题/段落/列表/表格);仅扫描页嵌入整页图。
+
+    不再为每页插入「第 N 页」标题(会污染目录),页与页之间用分页符分隔。
+    """
     from docx import Document
 
     doc = Document()
     _docx_set_default_font(doc)
-    for page in pages:
-        doc.add_heading(f"第 {page.num} 页", level=1)
+    _docx_set_page_size(doc, pages)
+    for index, page in enumerate(pages):
+        if index:  # 保留原始分页边界,但不写入任何可见标题
+            doc.add_page_break()
         if page.png:  # 扫描件:整页图片兜底,跳过零散图片块避免重复贴图
             _docx_add_picture(doc, page.png, DOCX_TEXT_WIDTH_INCHES)
             continue
@@ -936,8 +1156,11 @@ def _xlsx_write_table(sheet, rows: list[list[str]]) -> None:
     columns = max(len(row) for row in rows)
     for row_index, row in enumerate(rows, start=1):
         for column_index in range(1, columns + 1):
-            value = row[column_index - 1] if column_index - 1 < len(row) else ""
+            raw = row[column_index - 1] if column_index - 1 < len(row) else ""
+            value, number_format = _coerce_cell_value(raw)
             cell = sheet.cell(row=row_index, column=column_index, value=value)
+            if number_format:
+                cell.number_format = number_format
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             if row_index == 1:
                 cell.font = Font(bold=True)
@@ -953,6 +1176,33 @@ def _xlsx_write_table(sheet, rows: list[list[str]]) -> None:
         sheet.column_dimensions[get_column_letter(column_index)].width = min(
             XLSX_COL_MAX_WIDTH, max(XLSX_COL_MIN_WIDTH, width)
         )
+
+
+def _coerce_cell_value(text: str) -> tuple[object, str | None]:
+    """表格单元格文本 -> (值, 数字格式)。
+
+    纯数字(含千分位/货币符号)转成 Excel 数值,便于直接求和排序;
+    保留原始小数位数作为 number_format(128.50 -> 128.5 但显示 128.50)。
+    带前导零的编号(007、0123)按文本保留,避免丢位。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return raw, None
+    candidate = raw[1:].lstrip() if raw[:1] in CURRENCY_SYMBOLS else raw
+    match = NUMERIC_CELL_RE.match(candidate)
+    if not match:
+        return raw, None
+    digits = match.group("int").replace(",", "")
+    if len(digits) > 1 and digits.startswith("0"):
+        return raw, None
+    number_text = ("-" if match.group("sign") else "") + digits + (match.group("frac") or "")
+    try:
+        fraction = match.group("frac")
+        if fraction:
+            return float(number_text), "0." + "0" * (len(fraction) - 1)
+        return int(number_text), "0"
+    except ValueError:
+        return raw, None
 
 
 def _xlsx_write_text(sheet, text: str) -> None:
@@ -980,16 +1230,18 @@ def to_xlsx(pages: list[Page], out_path: str) -> None:
 
     for page in pages:
         tables = [block for block in page.blocks if block.kind == "table"]
+        # 表格内容已写入独立工作表,文本表只放表外文字,避免同一份数据出现两次
+        text = _blocks_to_text([block for block in page.blocks if block.kind != "table"])
         if tables:
             for index, table in enumerate(tables, start=1):
                 base = f"第{page.num}页" if index == 1 else f"第{page.num}页-表{index}"
                 _xlsx_write_table(workbook.create_sheet(title=_sheet_name(base, used)), table.rows)
-            if page.text.strip():
+            if text.strip():
                 title = _sheet_name(f"第{page.num}页-文本", used)
-                _xlsx_write_text(workbook.create_sheet(title=title), page.text)
+                _xlsx_write_text(workbook.create_sheet(title=title), text)
         else:
             title = _sheet_name(f"第{page.num}页", used)
-            _xlsx_write_text(workbook.create_sheet(title=title), page.text)
+            _xlsx_write_text(workbook.create_sheet(title=title), text)
 
     if not workbook.sheetnames:
         workbook.create_sheet(title=XLSX_EMPTY_SHEET)
@@ -1000,7 +1252,7 @@ def to_xlsx(pages: list[Page], out_path: str) -> None:
 
 
 def _pptx_texts(blocks: list[Block]) -> tuple[str, list[str]]:
-    """语义块 -> (标题, 要点列表);标题取第一个标题块,要点截断到上限。"""
+    """语义块 -> (标题, 要点列表);标题取第一个标题块,要点不截断(由调用方分页)。"""
     title = ""
     items: list[str] = []
     for block in blocks:
@@ -1010,7 +1262,7 @@ def _pptx_texts(blocks: list[Block]) -> tuple[str, list[str]]:
             title = block.text
             continue
         items.append(("• " if block.kind == "list" else "") + block.text)
-    return title, items[:PPTX_MAX_ITEMS]
+    return title, items
 
 
 def _pptx_add_title(slide, title: str) -> None:
@@ -1048,24 +1300,339 @@ def to_pptx(pages: list[Page], out_path: str) -> None:
     total = len(pages)
 
     for page in pages:
-        slide = presentation.slides.add_slide(blank_layout)
         title, items = _pptx_texts(page.blocks)
-        if title or items:
-            if title:
-                _pptx_add_title(slide, title)
-            if items:
-                _pptx_add_items(slide, items)
-        elif page.png:
+        if not title and not items and page.png:
+            slide = presentation.slides.add_slide(blank_layout)
             try:
                 slide.shapes.add_picture(
                     BytesIO(page.png), 0, 0, width=presentation.slide_width, height=presentation.slide_height
                 )
             except Exception:  # noqa: BLE001 - 图片异常时保留可读的页码占位
                 pass
-        footer = slide.shapes.add_textbox(Inches(11.8), Inches(7.05), Inches(1.4), Inches(0.4))
-        footer.text_frame.text = f"{page.num} / {total}"
+            _pptx_add_footer(slide, page.num, total)
+            continue
+
+        # 单页要点过多时自动续页,避免被静默截断
+        chunks = [items[index : index + PPTX_MAX_ITEMS] for index in range(0, len(items), PPTX_MAX_ITEMS)] or [[]]
+        for chunk_index, chunk in enumerate(chunks):
+            slide = presentation.slides.add_slide(blank_layout)
+            if chunk_index == 0:
+                slide_title = title
+            else:
+                slide_title = f"{title or f'第 {page.num} 页'}（续）"
+            if slide_title:
+                _pptx_add_title(slide, slide_title)
+            if chunk:
+                _pptx_add_items(slide, chunk)
+            _pptx_add_footer(slide, page.num, total)
 
     presentation.save(out_path)
+
+
+def _pptx_add_footer(slide, page_num: int, total: int) -> None:
+    from pptx.util import Inches
+
+    footer = slide.shapes.add_textbox(Inches(11.8), Inches(7.05), Inches(1.4), Inches(0.4))
+    footer.text_frame.text = f"{page_num} / {total}"
+
+
+# ---------- 原版式输出(Word / PPT) ----------
+
+
+_LAYOUT_NS = (
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+    'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+    'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" '
+    'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"'
+)
+
+
+def _layout_font_name(name: str) -> str:
+    """去掉 PDF 字体子集前缀(ABCDEF+)与回退列表,尽量沿用原字体名。"""
+    value = re.sub(r"^[A-Z]{6}\+", "", (name or "").strip())
+    value = value.split(",")[0].strip()
+    return value or DOCX_BODY_FONT
+
+
+def _layout_color_hex(value: int) -> str:
+    return f"{(value >> 16) & 255:02X}{(value >> 8) & 255:02X}{value & 255:02X}"
+
+
+def _layout_emu(points: float) -> int:
+    return max(0, int(round(points * 12700)))
+
+
+def _layout_anchor(inner: str, x: float, y: float, width: float, height: float, shape_id: int, behind: bool) -> str:
+    """生成 WordprocessingML 浮动锚点(相对页面左上角定位)。"""
+    return (
+        f"<w:r {_LAYOUT_NS}><w:drawing>"
+        f'<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" '
+        f'relativeHeight="{shape_id}" behindDoc="{1 if behind else 0}" locked="0" '
+        f'layoutInCell="1" allowOverlap="1">'
+        f'<wp:simplePos x="0" y="0"/>'
+        f'<wp:positionH relativeFrom="page"><wp:posOffset>{_layout_emu(x)}</wp:posOffset></wp:positionH>'
+        f'<wp:positionV relativeFrom="page"><wp:posOffset>{_layout_emu(y)}</wp:posOffset></wp:positionV>'
+        f'<wp:extent cx="{_layout_emu(width)}" cy="{_layout_emu(height)}"/>'
+        f'<wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>'
+        f'<wp:docPr id="{shape_id}" name="Shape{shape_id}"/><wp:cNvGraphicFramePr/>'
+        f"{inner}</wp:anchor></w:drawing></w:r>"
+    )
+
+
+def _layout_picture_xml(rid: str, width: float, height: float, shape_id: int) -> str:
+    inner = (
+        '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        '<pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="page-bg.jpg"/><pic:cNvPicPr/></pic:nvPicPr>'
+        f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+        f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{_layout_emu(width)}" cy="{_layout_emu(height)}"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+        "</pic:pic></a:graphicData></a:graphic>"
+    )
+    return _layout_anchor(inner, 0, 0, width, height, shape_id, behind=True)
+
+
+def _layout_run_xml(span: dict) -> str:
+    text = span.get("text") or ""
+    size = max(float(span.get("size") or DEFAULT_FONT_SIZE), 1.0)
+    font = escape(_layout_font_name(span.get("font") or "")).replace('"', "&quot;")
+    color = _layout_color_hex(int(span.get("color") or 0))
+    flags = int(span.get("flags") or 0)
+    half_points = max(1, int(round(size * 2)))
+    props = f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:eastAsia="{font}"/>'
+    if flags & BOLD_FLAG:
+        props += "<w:b/>"
+    if flags & ITALIC_FLAG:
+        props += "<w:i/>"
+    props += f'<w:color w:val="{color}"/><w:sz w:val="{half_points}"/><w:szCs w:val="{half_points}"/>'
+    return f'<w:r><w:rPr>{props}</w:rPr><w:t xml:space="preserve">{escape(text)}</w:t></w:r>'
+
+
+def _layout_textbox_xml(span: dict, shape_id: int) -> str:
+    x0, y0, x1, y1 = span.get("bbox") or (0, 0, 0, 0)
+    width = max(x1 - x0, LAYOUT_BOX_MIN_PT) + 1.0
+    height = max(y1 - y0, LAYOUT_BOX_MIN_PT) + 1.0
+    paragraph = (
+        '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>'
+        '<w:jc w:val="left"/></w:pPr>'
+        f"{_layout_run_xml(span)}</w:p>"
+    )
+    inner = (
+        '<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        '<wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr>'
+        f'<a:xfrm><a:off x="0" y="0"/><a:ext cx="{_layout_emu(width)}" cy="{_layout_emu(height)}"/></a:xfrm>'
+        '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln>'
+        "</wps:spPr>"
+        f"<wps:txbx><w:txbxContent>{paragraph}</w:txbxContent></wps:txbx>"
+        '<wps:bodyPr rot="0" vert="horz" wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" '
+        'anchor="ctr" anchorCtr="0" upright="1"><a:noAutofit/></wps:bodyPr>'
+        "</wps:wsp></a:graphicData></a:graphic>"
+    )
+    return _layout_anchor(inner, x0, y0, width, height, shape_id, behind=False)
+
+
+def _layout_page_background(doc: fitz.Document, index: int) -> bytes:
+    """把单页复制一份并抹掉文字层,保留图片/线条/底纹,作为原版式背景。"""
+    work_doc = fitz.open()
+    try:
+        work_doc.insert_pdf(doc, from_page=index, to_page=index)
+        page = work_doc[0]
+        page.add_redact_annot(page.rect, fill=False, cross_out=False)
+        page.apply_redactions(
+            images=fitz.PDF_REDACT_IMAGE_NONE,
+            graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+            text=fitz.PDF_REDACT_TEXT_REMOVE,
+        )
+        bg_scale = _render_scale(page.rect, LAYOUT_BG_SCALE)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(bg_scale, bg_scale), alpha=False)
+        try:
+            return pixmap.tobytes("jpeg", jpg_quality=LAYOUT_BG_JPEG_QUALITY)
+        except (RuntimeError, ValueError):  # 个别 PyMuPDF 构建不支持 JPEG 参数时退回 PNG
+            return pixmap.tobytes("png")
+    finally:
+        work_doc.close()
+
+
+def _layout_text_spans(page: fitz.Page) -> Iterator[dict]:
+    """按文档顺序产出可见文字 span(带 bbox/字号/颜色/粗斜体)。"""
+    try:
+        blocks = page.get_text("dict").get("blocks", [])
+    except Exception:  # noqa: BLE001 - 单页解析失败时保留背景图,不中断整篇
+        return
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = span.get("text") or ""
+                if not text.strip() or span.get("alpha", 255) == 0:
+                    continue
+                x0, y0, x1, y1 = span.get("bbox") or (0, 0, 0, 0)
+                if x1 - x0 < 0.2 or y1 - y0 < 0.2:
+                    continue
+                yield span
+
+
+def _docx_layout_section(section, page: fitz.Page) -> None:
+    from docx.shared import Pt
+
+    section.page_width = Pt(page.rect.width)
+    section.page_height = Pt(page.rect.height)
+    section.left_margin = Pt(0)
+    section.right_margin = Pt(0)
+    section.top_margin = Pt(0)
+    section.bottom_margin = Pt(0)
+    section.header_distance = Pt(0)
+    section.footer_distance = Pt(0)
+
+
+def to_docx_preserve(in_path: str, out_path: str) -> None:
+    """Word 原版式:页面尺寸/位置/字号/颜色/图片与 PDF 一致,文字仍可编辑。
+
+    做法:每页先渲染一张「去掉文字层、保留图形与图片」的背景图,再按 span 的
+    PDF 坐标覆盖绝对定位文本框。这样表格线、图表、底纹、图片不会丢失,而文字
+    仍能在 Word 中选中和修改。
+    """
+    from docx import Document
+    from docx.enum.section import WD_SECTION
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    with _open_pdf(in_path) as pdf:
+        if len(pdf) == 0:
+            raise PdfError("PDF 没有页面")
+        document = Document()
+        _docx_set_default_font(document)
+        section = document.sections[0]
+        current_size: tuple[float, float] | None = None
+        shape_id = 1000
+        new_section = False
+
+        for index in range(len(pdf)):
+            page = pdf[index]
+            page_size = (round(page.rect.width, 1), round(page.rect.height, 1))
+            if current_size is None:
+                _docx_layout_section(section, page)
+                current_size = page_size
+            elif (
+                abs(page_size[0] - current_size[0]) > LAYOUT_PAGE_SIZE_TOLERANCE_PT
+                or abs(page_size[1] - current_size[1]) > LAYOUT_PAGE_SIZE_TOLERANCE_PT
+            ):
+                section = document.add_section(WD_SECTION.NEW_PAGE)
+                _docx_layout_section(section, page)
+                current_size = page_size
+                new_section = True
+
+            paragraph = document.add_paragraph()
+            fmt = paragraph.paragraph_format
+            fmt.space_before = Pt(0)
+            fmt.space_after = Pt(0)
+            fmt.line_spacing = Pt(1)
+            if index and not new_section:
+                fmt.page_break_before = True
+            new_section = False
+
+            # 背景图:先作为 inline 图片建立关系,再替换成相对页面定位的浮动锚点
+            run = paragraph.add_run()
+            run.add_picture(
+                BytesIO(_layout_page_background(pdf, index)),
+                width=Pt(page.rect.width),
+                height=Pt(page.rect.height),
+            )
+            inline = run._r.find(".//" + qn("wp:inline"))
+            if inline is not None:
+                blip = inline.find(".//" + qn("a:blip"))
+                rid = blip.get(qn("r:embed")) if blip is not None else None
+                run._r.getparent().remove(run._r)
+                if rid:
+                    shape_id += 1
+                    paragraph._p.append(
+                        parse_xml(_layout_picture_xml(rid, page.rect.width, page.rect.height, shape_id))
+                    )
+
+            for span in _layout_text_spans(page):
+                shape_id += 1
+                paragraph._p.append(parse_xml(_layout_textbox_xml(span, shape_id)))
+
+        document.save(out_path)
+
+
+def _pptx_set_east_asian_font(run, font_name: str) -> None:
+    """python-pptx 只写 latin 字体;补 a:ea 让中文也尽量使用原字体。"""
+    from pptx.oxml.ns import qn
+    from pptx.oxml.xmlchemy import OxmlElement
+
+    rpr = run._r.get_or_add_rPr()
+    ea = rpr.find(qn("a:ea"))
+    if ea is None:
+        ea = OxmlElement("a:ea")
+        rpr.append(ea)
+    ea.set("typeface", font_name)
+
+
+def to_pptx_preserve(in_path: str, out_path: str) -> None:
+    """PPT 原版式:一页 PDF 对应一张同尺寸幻灯片,背景+绝对定位文字框。"""
+    from pptx import Presentation
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
+    from pptx.util import Pt
+
+    with _open_pdf(in_path) as pdf:
+        if len(pdf) == 0:
+            raise PdfError("PDF 没有页面")
+        first = pdf[0]
+        presentation = Presentation()
+        presentation.slide_width = Pt(first.rect.width)
+        presentation.slide_height = Pt(first.rect.height)
+        blank_layout = presentation.slide_layouts[6]
+
+        for index in range(len(pdf)):
+            page = pdf[index]
+            slide = presentation.slides.add_slide(blank_layout)
+            slide.shapes.add_picture(
+                BytesIO(_layout_page_background(pdf, index)),
+                0,
+                0,
+                width=presentation.slide_width,
+                height=presentation.slide_height,
+            )
+            scale_x = first.rect.width / max(page.rect.width, 1.0)
+            scale_y = first.rect.height / max(page.rect.height, 1.0)
+            font_scale = min(scale_x, scale_y)
+            for span in _layout_text_spans(page):
+                x0, y0, x1, y1 = span.get("bbox") or (0, 0, 0, 0)
+                box = slide.shapes.add_textbox(
+                    Pt(x0 * scale_x),
+                    Pt(y0 * scale_y),
+                    Pt(max(x1 - x0, LAYOUT_BOX_MIN_PT) * scale_x),
+                    Pt(max(y1 - y0, LAYOUT_BOX_MIN_PT) * scale_y),
+                )
+                frame = box.text_frame
+                frame.word_wrap = False
+                frame.auto_size = MSO_AUTO_SIZE.NONE
+                frame.margin_left = 0
+                frame.margin_right = 0
+                frame.margin_top = 0
+                frame.margin_bottom = 0
+                frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+                paragraph = frame.paragraphs[0]
+                paragraph.alignment = PP_ALIGN.LEFT
+                run = paragraph.add_run()
+                run.text = span.get("text") or ""
+                size = max(float(span.get("size") or DEFAULT_FONT_SIZE), 1.0) * font_scale
+                font = run.font
+                font.size = Pt(size)
+                font.name = _layout_font_name(span.get("font") or "")
+                _pptx_set_east_asian_font(run, font.name)
+                flags = int(span.get("flags") or 0)
+                font.bold = bool(flags & BOLD_FLAG)
+                font.italic = bool(flags & ITALIC_FLAG)
+                color = int(span.get("color") or 0)
+                font.color.rgb = RGBColor((color >> 16) & 255, (color >> 8) & 255, color & 255)
+
+        presentation.save(out_path)
 
 
 # ---------- 格式注册表 / 分发 ----------
@@ -1140,6 +1707,7 @@ def _build_parser() -> _Parser:
     parser.add_argument("in_pdf", help="输入 PDF 文件路径")
     parser.add_argument("out", nargs="?", default=None, help="输出文件路径(--format/--page 时必填)")
     parser.add_argument("--format", default=None, help="word|excel|ppt|image|txt|md")
+    parser.add_argument("--layout", action="store_true", help="Word/PPT 保留原版式(绝对定位文字层)")
     parser.add_argument("--page", type=int, default=None, help="仅渲染第 N 页为 PNG")
     parser.add_argument("--check", action="store_true", help="仅统计页数")
     return parser
@@ -1162,6 +1730,13 @@ def main(argv=None) -> int:
                 raise PdfError(f"未知格式: {args.format}")
             if not args.out:
                 raise PdfError("缺少输出文件参数")
+            if args.layout:
+                if args.format not in ("word", "ppt"):
+                    raise PdfError("--layout 仅支持 word / ppt")
+                writer = to_docx_preserve if args.format == "word" else to_pptx_preserve
+                writer(args.in_pdf, args.out)
+                _print_json({"ok": True, "numPages": count_pages(args.in_pdf)})
+                return 0
             spec = _FORMAT_SPECS[args.format]
             if spec.writer is None:
                 num_pages = _write_markdown(args.in_pdf, args.out)

@@ -1056,6 +1056,128 @@ body::before {
   margin: 0 auto;
   animation: page-in 0.3s ease-out both;
 }
+/* ---------- 工具箱：上传/拖拽区（桃夭国风） ---------- */
+.pdf-dropzone {
+  border: 2px dashed #e4c3cc;
+  border-radius: 12px;
+  padding: 26px 20px;
+  text-align: center;
+  margin-bottom: 16px;
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), var(--gray-light));
+  transition:
+    border-color 0.18s,
+    background 0.18s,
+    box-shadow 0.18s,
+    transform 0.18s;
+}
+.pdf-dropzone:hover {
+  border-color: var(--accent);
+  background: #fff;
+  box-shadow: 0 8px 22px -16px rgba(74, 42, 49, 0.4);
+}
+.pdf-dropzone.dragover {
+  border-color: var(--accent);
+  background: var(--nav-active);
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px var(--nav-active);
+  transform: scale(1.008);
+}
+
+/* ---------- 工具箱：Git 指南 ---------- */
+.git-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.git-search input[type='search'] {
+  flex: 1;
+  min-width: 0;
+}
+.git-tabs {
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.git-tabs .tab {
+  font-size: 12px;
+  padding: 5px 11px;
+}
+.git-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.git-entry {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), var(--panel));
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s,
+    transform 0.16s;
+}
+.git-entry:hover {
+  border-color: #e9c8d1;
+  box-shadow: 0 10px 26px -20px rgba(74, 42, 49, 0.45);
+  transform: translateY(-1px);
+}
+.git-entry-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.git-entry-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text);
+}
+.git-entry-head .badge {
+  flex-shrink: 0;
+}
+.git-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--gray-light);
+}
+.git-cmd code {
+  flex: 1;
+  min-width: 0;
+  font-family: 'Cascadia Code', 'Consolas', 'Menlo', monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--accent-dark);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.git-copy {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.9);
+}
+.git-entry-extra,
+.git-entry-note {
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+}
+.git-entry-note {
+  color: var(--accent-dark);
+  opacity: 0.82;
+}
+
+/* 工具列表左栏选中行使用内联 var(--nav-active)，已随主题变化，无需硬编码 */
+
 @keyframes page-in {
   from {
     opacity: 0;

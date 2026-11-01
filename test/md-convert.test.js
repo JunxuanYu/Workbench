@@ -31,10 +31,10 @@ test('工具注册表：Markdown 转换工具已自动注册且顺序正确', as
   assert.equal(mdTool.name, 'Markdown 转换');
   assert.equal(mdTool.icon, '📝');
   assert.equal(typeof mdTool.render, 'function');
-  // 顺序：pdf-convert → md-convert → json-convert
+  // 顺序：pdf-convert → md-convert → json-convert → git-guide（v1.2.0 新增）
   assert.deepEqual(
     tools.map((t) => t.id),
-    ['pdf-convert', 'md-convert', 'json-convert'],
+    ['pdf-convert', 'md-convert', 'json-convert', 'git-guide'],
   );
 });
 

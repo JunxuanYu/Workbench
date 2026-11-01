@@ -53,6 +53,48 @@ test('全局样式：所有 var(--x) 引用都已声明，避免视觉变量拼�
   assert.deepEqual(missing, [], `存在未声明的 CSS 变量：${missing.join(', ')}`);
 });
 
+test('全局样式：JS 内联样式的 var(--x) 引用也都已声明（含回退前的主名）', async () => {
+  const { readdirSync, statSync } = await import('node:fs');
+  const jsFiles = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (name.endsWith('.js')) jsFiles.push(p);
+    }
+  };
+  walk(join(root, 'public', 'js'));
+  const declared = new Set([...CSS.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+  const missing = [];
+  for (const file of jsFiles) {
+    const src = readFileSync(file, 'utf8');
+    for (const m of src.matchAll(/var\((--[\w-]+)/g)) {
+      if (!declared.has(m[1])) missing.push(`${m[1]}（${file.replace(root, '')}）`);
+    }
+  }
+  assert.deepEqual(missing, [], `JS 内联样式中存在未声明的 CSS 变量：${missing.join(', ')}`);
+});
+
+test('全局样式：无旧主题残留的硬编码蓝色选中色（#eef1fe 应使用 var(--nav-active)）', () => {
+  for (const rel of ['public/js/pages/consult.js', 'public/js/pages/dev.js', 'public/js/tools/pdf-convert.js']) {
+    const src = readFileSync(join(root, rel), 'utf8');
+    assert.ok(!src.includes('#eef1fe'), `${rel} 仍包含旧蓝色硬编码 #eef1fe`);
+    assert.ok(!src.includes('var(--primary'), `${rel} 仍引用未声明的 var(--primary)`);
+  }
+});
+
+test('全局样式：PDF 上传区使用桃夭主题类（.pdf-dropzone / .dragover）', () => {
+  assert.match(CSS, /\.pdf-dropzone\s*\{/);
+  assert.match(CSS, /\.pdf-dropzone:hover\s*\{/);
+  assert.match(CSS, /\.pdf-dropzone\.dragover\s*\{/);
+  const dragBlock = CSS.slice(
+    CSS.indexOf('.pdf-dropzone.dragover'),
+    CSS.indexOf('}', CSS.indexOf('.pdf-dropzone.dragover')),
+  );
+  assert.ok(dragBlock.includes('var(--accent)'), '拖拽悬停态应使用主题强调色');
+  assert.ok(dragBlock.includes('var(--nav-active)'), '拖拽悬停态应使用主题激活底色');
+});
+
 test('全局样式：桃夭视觉关键规则存在（宣纸背景/侧栏/标题/卡片/主按钮）', () => {
   assert.match(CSS, /body::before/);
   assert.match(CSS, /\.sidebar::before/);

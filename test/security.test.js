@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { createApp } from '../server.js';
+import { createApp, contentDispositionAttachment, inspectOpenTarget, sweepStaleFiles } from '../server.js';
 import { defaultData, migrateData, validateData } from '../public/js/logic.js';
 import { renderMarkdown, safeUrl } from '../public/js/markdown.js';
 import { DEFAULT_ITERATIONS, MAX_ITERATIONS, createVault, unlockVault, validateVault } from '../public/js/vault.js';
@@ -273,5 +273,177 @@ describe('密码箱：加密参数与明文不落盘', () => {
     assert.equal(validateVault({ salt: 'x', iterations: MAX_ITERATIONS + 1, data: 'y' }).ok, false);
     assert.equal(validateVault({ salt: 'x', iterations: 0, data: 'y' }).ok, false);
     assert.equal(validateVault({ salt: 'x', iterations: 1000, data: 'y' }).ok, true);
+  });
+});
+
+// ---------- 工具箱 UI 注入面回归（v1.1.1）：innerHTML 只允许静态字符串 ----------
+// 工具页（pdf/md/json convert）的 innerHTML 均应为清空或静态模板；
+// 若未来在 innerHTML 中拼接 ${ 变量（尤其含文件名/用户输入），会形成 XSS 注入面。
+test('工具箱 UI：tools/*.js 的 innerHTML 调用均为静态字符串，不拼接变量', async () => {
+  const { readdirSync, statSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const toolsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'js', 'tools');
+  const offenders = [];
+  for (const name of readdirSync(toolsDir)) {
+    const p = path.join(toolsDir, name);
+    if (!statSync(p).isFile() || !name.endsWith('.js')) continue;
+    const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/);
+    lines.forEach((line, i) => {
+      if (/\.innerHTML\s*=(?!=)/.test(line) && line.includes('${')) {
+        offenders.push(`${name}:${i + 1}`);
+      }
+    });
+  }
+  assert.deepEqual(offenders, [], `innerHTML 不得拼接变量（潜在 XSS）：${offenders.join(', ')}`);
+});
+
+test('工具箱 UI：文件名校验在前（validatePdfFile），文件名仅用于 UI 文本与 URL 编码参数', async () => {
+  const src = fs.readFileSync(path.join('public', 'js', 'tools', 'pdf-convert.js'), 'utf8');
+  assert.ok(src.includes('export function validatePdfFile'), 'PDF 文件校验应为可测试的导出纯函数');
+  assert.ok(src.includes('encodeURIComponent(file.name)'), '文件名进入 URL 时必须 encodeURIComponent');
+  assert.ok(!src.match(/file\.name\}.*innerHTML|innerHTML.*\$\{.*file\.name/), '文件名不得拼接进 innerHTML');
+});
+
+// ---------- 2026-11-01 安全审计：/api/open 执行面收敛 ----------
+describe('打开本地文件：执行类扩展名与真实路径校验', () => {
+  const asFile = () => ({ isFile: () => true, isDirectory: () => false });
+
+  test('覆盖 Windows 上以「文档」面貌出现的执行入口（.cpl/.msc/.chm/.settingcontent-ms 等）', () => {
+    const execExts = [
+      'cpl',
+      'msc',
+      'chm',
+      'settingcontent-ms',
+      'scf',
+      'diagcab',
+      'appx',
+      'appxbundle',
+      'msix',
+      'msixbundle',
+      'vb',
+      'ws',
+      'wsc',
+      'wsh',
+      'reg',
+      'inf',
+      'ps1xml',
+      'pssc',
+      'cdxml',
+      'application',
+    ];
+    const missed = execExts.filter(
+      (ext) => !inspectOpenTarget(`C:\\tmp\\evil.${ext}`, { platform: 'win32', statSync: asFile }).error,
+    );
+    assert.deepEqual(missed, [], `以下执行类扩展名未被拦截：${missed.join(', ')}`);
+  });
+
+  test('按真实路径二次校验：notes.txt 指向 evil.exe 时拒绝（符号链接/硬链接绕过）', () => {
+    const check = inspectOpenTarget('C:\\tmp\\notes.txt', {
+      platform: 'win32',
+      statSync: asFile,
+      realpathSync: () => 'C:\\tmp\\evil.exe',
+    });
+    assert.equal(check.ok, false);
+    assert.match(check.error, /可执行/);
+  });
+
+  test('普通文档与目录放行，返回真实路径', () => {
+    const doc = inspectOpenTarget('C:\\tmp\\报告.pdf', {
+      platform: 'win32',
+      statSync: asFile,
+      realpathSync: () => 'C:\\tmp\\报告.pdf',
+    });
+    assert.equal(doc.ok, true);
+    assert.equal(doc.target, 'C:\\tmp\\报告.pdf');
+
+    const dir = inspectOpenTarget('C:\\tmp', {
+      platform: 'win32',
+      statSync: () => ({ isFile: () => false, isDirectory: () => true }),
+    });
+    assert.equal(dir.ok, true);
+  });
+
+  test('空路径/UNC/不存在分别返回 400/400/404', () => {
+    assert.equal(inspectOpenTarget('   ').status, 400);
+    assert.equal(inspectOpenTarget('\\\\server\\share\\a.txt').status, 400);
+    const missing = inspectOpenTarget('C:\\no\\such\\file.md', {
+      platform: 'win32',
+      statSync: () => {
+        throw new Error('ENOENT');
+      },
+    });
+    assert.equal(missing.status, 404);
+  });
+
+  test('Windows 命令元字符仅在 win32 拒绝（其它平台允许 & 等合法文件名字符）', () => {
+    const st = asFile;
+    assert.equal(inspectOpenTarget('C:\\a&b.txt', { platform: 'win32', statSync: st }).status, 400);
+    assert.equal(
+      inspectOpenTarget('/home/u/a&b.txt', { platform: 'darwin', statSync: st, realpathSync: (p) => p }).ok,
+      true,
+    );
+  });
+
+  test('HTTP 层：新增执行类扩展名均返回 400 且不触发系统调用', async () => {
+    for (const ext of [
+      '.cpl',
+      '.msc',
+      '.chm',
+      '.settingcontent-ms',
+      '.scf',
+      '.diagcab',
+      '.appx',
+      '.msix',
+      '.reg',
+      '.inf',
+    ]) {
+      const f = path.join(tmpDir, `probe${ext}`);
+      fs.writeFileSync(f, 'x');
+      try {
+        const r = await fetch(`${base}/api/open`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: f }),
+        });
+        assert.equal(r.status, 400, `${ext} 应被拒绝`);
+        assert.match((await r.json()).error, /不支持打开可执行/);
+      } finally {
+        fs.rmSync(f, { force: true });
+      }
+    }
+  });
+
+  test('下载头：附件名按 RFC 5987 转义 ( ) * ! 等保留字符', () => {
+    const header = contentDispositionAttachment("a'b(c)*d!.pdf");
+    assert.ok(header.startsWith("attachment; filename*=UTF-8''"));
+    const encoded = header.split("filename*=UTF-8''")[1];
+    assert.ok(!/['()*!]/.test(encoded), `保留字符未转义：${encoded}`);
+    assert.equal(decodeURIComponent(encoded), "a'b(c)*d!.pdf");
+  });
+
+  test('安全响应头新增 X-Permitted-Cross-Domain-Policies: none', async () => {
+    const r = await fetch(`${base}/`);
+    assert.equal(r.headers.get('x-permitted-cross-domain-policies'), 'none');
+  });
+});
+
+describe('临时目录：并发启动不互相删除在用的临时文件', () => {
+  test('只清理超过存活期的遗留文件，近期文件保留', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklift-sweep-'));
+    try {
+      const oldFile = path.join(dir, 'old.pdf');
+      const freshFile = path.join(dir, 'fresh.pdf');
+      fs.writeFileSync(oldFile, 'x');
+      fs.writeFileSync(freshFile, 'x');
+      const twoHoursAgo = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+      fs.utimesSync(oldFile, twoHoursAgo, twoHoursAgo);
+
+      sweepStaleFiles(dir, 60 * 60 * 1000);
+
+      assert.equal(fs.existsSync(oldFile), false, '过期遗留文件应被清理');
+      assert.equal(fs.existsSync(freshFile), true, '其它实例正在使用的文件必须保留');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

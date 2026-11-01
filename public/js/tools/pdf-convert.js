@@ -29,6 +29,42 @@ export const FORMAT_OPTIONS = [
   { id: 'md', label: 'Markdown (.md)', icon: '📘', mime: 'text/markdown;charset=utf-8', ext: '.md' },
 ];
 
+// ---------- 纯逻辑：文件校验（可单测） ----------
+
+export const PDF_MAX_SIZE_MB = 200;
+
+/**
+ * 校验待转换的 PDF 文件（纯函数，Node 可直接测试）
+ * @param {{ name?: string, size?: number }} file
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+export function validatePdfFile(file) {
+  if (!file) return { ok: false, message: '❌ 请先选择文件' };
+  if (!file.name || !file.name.toLowerCase().endsWith('.pdf')) {
+    return { ok: false, message: '❌ 请选择 PDF 文件' };
+  }
+  if (!Number.isFinite(file.size) || file.size <= 0) {
+    return { ok: false, message: '❌ 文件为空，请选择有效的 PDF 文件' };
+  }
+  if (file.size > PDF_MAX_SIZE_MB * 1024 * 1024) {
+    return { ok: false, message: `❌ 文件过大（超过 ${PDF_MAX_SIZE_MB}MB），请压缩后再试` };
+  }
+  return { ok: true };
+}
+
+/**
+ * 构造转换请求 URL（纯函数，Node 可单测）
+ * 只有 Word / PPT 支持 layout=1；其它格式忽略该参数。
+ * @param {string} token
+ * @param {string} format
+ * @param {boolean} layout
+ */
+export function buildConvertUrl(token, format, layout = true) {
+  const params = new URLSearchParams({ token: token || '', format: format || '' });
+  if (layout && (format === 'word' || format === 'ppt')) params.set('layout', '1');
+  return `/api/tools/pdf/convert?${params.toString()}`;
+}
+
 // ---------- 工具入口 ----------
 
 export function createPdfConvertTool() {
@@ -50,10 +86,9 @@ function renderPdfConvert(container) {
   heading.textContent = 'PDF 转换工具';
   container.append(heading);
 
-  // 文件选择区域（支持拖拽上传）
+  // 文件选择区域（支持拖拽上传，外观由 .pdf-dropzone 主题样式控制）
   const dropZone = document.createElement('div');
-  dropZone.style.cssText =
-    'border:2px dashed var(--border);border-radius:8px;padding:20px;text-align:center;margin-bottom:16px;cursor:pointer;transition:all 0.2s;background:var(--card-bg);';
+  dropZone.className = 'pdf-dropzone';
   dropZone.innerHTML =
     '<div style="font-size:14px;margin-bottom:8px;">📁 拖拽 PDF 文件到此处，或点击选择文件</div><div style="font-size:12px;color:var(--text-soft);">支持 .pdf 格式，最大 200MB</div>';
   const fileInput = document.createElement('input');
@@ -64,17 +99,14 @@ function renderPdfConvert(container) {
   dropZone.onclick = () => fileInput.click();
   dropZone.ondragover = (e) => {
     e.preventDefault();
-    dropZone.style.borderColor = 'var(--primary)';
-    dropZone.style.background = 'var(--primary-light, rgba(59,130,246,0.05))';
+    dropZone.classList.add('dragover');
   };
   dropZone.ondragleave = () => {
-    dropZone.style.borderColor = 'var(--border)';
-    dropZone.style.background = 'var(--card-bg)';
+    dropZone.classList.remove('dragover');
   };
   dropZone.ondrop = (e) => {
     e.preventDefault();
-    dropZone.style.borderColor = 'var(--border)';
-    dropZone.style.background = 'var(--card-bg)';
+    dropZone.classList.remove('dragover');
     const file = e.dataTransfer.files[0];
     if (file) {
       fileInput.files = e.dataTransfer.files;
@@ -88,6 +120,22 @@ function renderPdfConvert(container) {
   const status = document.createElement('div');
   status.style.cssText = 'font-size:13px;color:var(--text-soft);margin-bottom:12px;min-height:20px;';
   container.append(status);
+
+  // 原版式开关（默认开启；仅 Word / PPT 生效）
+  const layoutRow = document.createElement('label');
+  layoutRow.className = 'pdf-layout-option';
+  layoutRow.style.cssText =
+    'display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--text-soft);margin-bottom:12px;cursor:pointer;user-select:none;';
+  const layoutCheckbox = document.createElement('input');
+  layoutCheckbox.type = 'checkbox';
+  layoutCheckbox.checked = true;
+  layoutCheckbox.style.cssText = 'margin-top:2px;accent-color:var(--accent);flex:0 0 auto;';
+  const layoutText = document.createElement('span');
+  layoutText.innerHTML =
+    '<strong style="color:var(--text);">保留原版式（推荐）</strong><br>' +
+    '<span style="font-size:12px;">Word / PPT 按 PDF 的页面尺寸、文字位置、字号、颜色和图片原样输出</span>';
+  layoutRow.append(layoutCheckbox, layoutText);
+  container.append(layoutRow);
 
   // 转换按钮区
   const btnRow = document.createElement('div');
@@ -134,18 +182,17 @@ function renderPdfConvert(container) {
     return btn;
   });
 
+  const setFmtButtonsEnabled = (enabled) => {
+    fmtBtns.forEach((b) => {
+      b.disabled = !enabled;
+    });
+  };
+
   const handleFile = async (file) => {
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      status.textContent = '❌ 请选择 PDF 文件';
-      return;
-    }
-    if (file.size === 0) {
-      status.textContent = '❌ 文件为空，请选择有效的 PDF 文件';
-      return;
-    }
-    if (file.size > 200 * 1024 * 1024) {
-      status.textContent = '❌ 文件过大（超过 200MB），请压缩后再试';
+    const check = validatePdfFile(file);
+    if (!check.ok) {
+      status.textContent = check.message;
       return;
     }
     currentFile = file;
@@ -195,14 +242,11 @@ function renderPdfConvert(container) {
     if (!currentToken) return;
     status.textContent = `⏳ 正在转换为 ${fmt.label}...`;
     resultArea.innerHTML = '';
-    fmtBtns.forEach((b) => {
-      b.disabled = true;
-    });
+    setFmtButtonsEnabled(false);
 
+    const keepLayout = layoutCheckbox.checked && (fmt.id === 'word' || fmt.id === 'ppt');
     try {
-      const resp = await fetch(
-        `/api/tools/pdf/convert?token=${encodeURIComponent(currentToken)}&format=${encodeURIComponent(fmt.id)}`,
-      );
+      const resp = await fetch(buildConvertUrl(currentToken, fmt.id, keepLayout));
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
         status.textContent =
@@ -212,11 +256,15 @@ function renderPdfConvert(container) {
       const blob = await resp.blob();
       const baseName = currentFile?.name?.replace(/\.pdf$/i, '') || 'output';
       const url = URL.createObjectURL(blob);
+      const sizeMb =
+        blob.size >= 1024 * 1024
+          ? `${(blob.size / 1024 / 1024).toFixed(1)} MB`
+          : `${Math.max(1, Math.round(blob.size / 1024))} KB`;
       const link = document.createElement('a');
       link.href = url;
       link.download = `${baseName}${fmt.ext}`;
       link.className = 'btn btn-primary';
-      link.textContent = `⬇ 下载 ${fmt.label}`;
+      link.textContent = `⬇ 下载 ${fmt.label}（${sizeMb}）`;
       link.style.cssText = 'display:inline-block;margin-top:8px;';
       resultArea.append(link);
 
@@ -253,13 +301,19 @@ function renderPdfConvert(container) {
       if (fmt.id === 'word' || fmt.id === 'excel' || fmt.id === 'ppt') {
         const hint = document.createElement('div');
         hint.style.cssText = 'font-size:12px;color:var(--text-soft);margin-top:8px;';
-        hint.textContent = '💡 下载后用 Word / Excel / PowerPoint 打开即可查看';
+        hint.textContent =
+          keepLayout && (fmt.id === 'word' || fmt.id === 'ppt')
+            ? '💡 已保留原版式：文字可编辑，表格线 / 图片 / 底纹保留在背景中'
+            : '💡 下载后用 Word / Excel / PowerPoint 打开即可查看';
         resultArea.append(hint);
       }
 
       status.textContent = `✅ 转换完成 — ${fmt.label}`;
     } catch (e) {
       status.textContent = `❌ 转换失败: ${e.message}`;
+    } finally {
+      // 转换结束后恢复格式按钮：同一文件可连续转换为多种格式（token 未过期即可复用）
+      setFmtButtonsEnabled(true);
     }
   }
 }

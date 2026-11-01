@@ -3,6 +3,7 @@ import { emptyEl } from '../components/empty.js';
 import { createPdfConvertTool } from '../tools/pdf-convert.js';
 import { createMdConvertTool } from '../tools/md-convert.js';
 import { createJsonConvertTool } from '../tools/json-convert.js';
+import { createGitGuideTool } from '../tools/git-guide.js';
 
 // ---------- 工具注册表 ----------
 const tools = [];
@@ -30,6 +31,7 @@ export function getTools() {
 registerTool(createPdfConvertTool());
 registerTool(createMdConvertTool());
 registerTool(createJsonConvertTool());
+registerTool(createGitGuideTool());
 
 // ---------- 页面状态 ----------
 let selectedId = null;
@@ -74,7 +76,7 @@ export async function render(container) {
       const item = document.createElement('div');
       item.className = 'row';
       item.style.cssText =
-        'cursor:pointer;' + (t.id === selectedId ? 'border-color:var(--accent);background:#eef1fe;' : '');
+        'cursor:pointer;' + (t.id === selectedId ? 'border-color:var(--accent);background:var(--nav-active);' : '');
       item.onclick = () => {
         selectedId = t.id;
         render(container);

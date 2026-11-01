@@ -62,14 +62,20 @@ test('工具注册表：缺字段抛错', () => {
 });
 
 // ---------- PDF 转换工具结构测试 ----------
-let createPdfConvertTool, FORMAT_OPTIONS;
+let createPdfConvertTool, FORMAT_OPTIONS, validatePdfFile, PDF_MAX_SIZE_MB, buildConvertUrl;
 
 test('PDF 工具：导入成功（模块顶层无副作用）', async () => {
   const mod = await import('../public/js/tools/pdf-convert.js');
   createPdfConvertTool = mod.createPdfConvertTool;
   FORMAT_OPTIONS = mod.FORMAT_OPTIONS;
+  validatePdfFile = mod.validatePdfFile;
+  PDF_MAX_SIZE_MB = mod.PDF_MAX_SIZE_MB;
+  buildConvertUrl = mod.buildConvertUrl;
   assert.equal(typeof createPdfConvertTool, 'function');
   assert.ok(Array.isArray(FORMAT_OPTIONS));
+  assert.equal(typeof validatePdfFile, 'function');
+  assert.equal(typeof PDF_MAX_SIZE_MB, 'number');
+  assert.equal(typeof buildConvertUrl, 'function');
 });
 
 test('PDF 工具：createPdfConvertTool 返回正确结构', () => {
@@ -103,6 +109,58 @@ test('PDF 工具：FORMAT_OPTIONS 顺序与扩展名/MIME 契约', () => {
     assert.ok(f.label, `${f.id} 应有 label`);
     assert.ok(f.icon, `${f.id} 应有 icon`);
   }
+});
+
+// ---------- 文件校验纯函数测试（本次新增） ----------
+const MB = 1024 * 1024;
+
+test('PDF 校验：非 PDF 文件被拒绝', () => {
+  assert.equal(validatePdfFile(null).ok, false);
+  assert.match(validatePdfFile(null).message, /请先选择文件/);
+  assert.match(validatePdfFile({ name: 'a.docx', size: 100 }).message, /请选择 PDF 文件/);
+  assert.match(validatePdfFile({ name: 'a.pdf.exe', size: 100 }).message, /请选择 PDF 文件/);
+});
+
+test('PDF 校验：空文件 / 非法大小被拒绝', () => {
+  assert.match(validatePdfFile({ name: 'a.pdf', size: 0 }).message, /文件为空/);
+  assert.equal(validatePdfFile({ name: 'a.pdf' }).ok, false);
+  assert.equal(validatePdfFile({ name: 'a.pdf', size: -5 }).ok, false);
+  assert.equal(validatePdfFile({ name: 'a.pdf', size: NaN }).ok, false);
+});
+
+test('PDF 校验：超过 200MB 上限被拒绝，提示含上限数字', () => {
+  const r = validatePdfFile({ name: 'big.pdf', size: (PDF_MAX_SIZE_MB + 1) * MB });
+  assert.equal(r.ok, false);
+  assert.match(r.message, new RegExp(`超过 ${PDF_MAX_SIZE_MB}MB`));
+});
+
+test('PDF 校验：合法 PDF 通过，且 .PDF 大写扩展名可用', () => {
+  assert.deepEqual(validatePdfFile({ name: '报告.PDF', size: 12 * MB }), { ok: true });
+  assert.deepEqual(validatePdfFile({ name: 'a.pdf', size: 1 }), { ok: true });
+});
+
+test('PDF 校验：200MB 上限与 UI 提示文案一致（拖拽区提示 200MB）', async () => {
+  const src = await (
+    await import('node:fs/promises')
+  ).readFile(new URL('../public/js/tools/pdf-convert.js', import.meta.url), 'utf8');
+  assert.ok(src.includes(`最大 ${PDF_MAX_SIZE_MB}MB`), '拖拽区提示应使用 PDF_MAX_SIZE_MB 同值文案');
+});
+
+test('PDF 转换：buildConvertUrl 仅对 Word/PPT 追加 layout=1', () => {
+  assert.equal(buildConvertUrl('tok', 'word'), '/api/tools/pdf/convert?token=tok&format=word&layout=1');
+  assert.equal(buildConvertUrl('tok', 'ppt'), '/api/tools/pdf/convert?token=tok&format=ppt&layout=1');
+  assert.equal(buildConvertUrl('tok', 'word', false), '/api/tools/pdf/convert?token=tok&format=word');
+  assert.equal(buildConvertUrl('tok', 'excel', true), '/api/tools/pdf/convert?token=tok&format=excel');
+  assert.equal(buildConvertUrl('tok', 'md'), '/api/tools/pdf/convert?token=tok&format=md');
+});
+
+test('PDF 转换：默认开启“保留原版式”，并说明 Word/PPT 生效', async () => {
+  const src = await (
+    await import('node:fs/promises')
+  ).readFile(new URL('../public/js/tools/pdf-convert.js', import.meta.url), 'utf8');
+  assert.ok(src.includes('保留原版式（推荐）'), '界面应有保留原版式开关');
+  assert.match(src, /layoutCheckbox\.checked = true/, '默认应开启保留原版式');
+  assert.ok(src.includes('Word / PPT'), '说明应写明仅 Word/PPT 生效');
 });
 
 // ---------- 会话令牌存储测试（假时钟） ----------
@@ -161,8 +219,8 @@ function createMockPdfTool() {
       if (body == null || body.length === 0) throw new PdfHttpError(400, '无法解析：内容为空');
       return { token: 'tok123', numPages: 3 };
     },
-    async convert(token, format) {
-      calls.convert.push({ token, format });
+    async convert(token, format, options = {}) {
+      calls.convert.push({ token, format, layout: Boolean(options.layout) });
       if (format === 'word') {
         return {
           buffer: Buffer.from('fake-docx-content'),
@@ -286,7 +344,16 @@ test('GET /api/tools/pdf/convert：成功返回文件字节与下载头', async 
     assert.ok(cd.includes(encodeURIComponent('测试文档.docx')), '文件名应 UTF-8 编码');
     const bytes = new Uint8Array(await resp.arrayBuffer());
     assert.equal(Buffer.from(bytes).toString(), 'fake-docx-content');
-    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'word' });
+    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'word', layout: false });
+  });
+});
+
+test('GET /api/tools/pdf/convert：layout=1 透传给工具层', async () => {
+  const tool = createMockPdfTool();
+  await withApp(tool, {}, async (base) => {
+    const resp = await fetch(`${base}/api/tools/pdf/convert?token=tok123&format=word&layout=1`);
+    assert.equal(resp.status, 200);
+    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'word', layout: true });
   });
 });
 
@@ -301,7 +368,7 @@ test('GET /api/tools/pdf/convert：Markdown 成功返回 UTF-8 字节与下载�
     assert.ok(cd.includes(encodeURIComponent('测试文档.md')), '文件名应 UTF-8 编码且为 .md');
     const text = await resp.text();
     assert.equal(text, '# 标题\n\n正文内容');
-    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'md' });
+    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'md', layout: false });
   });
 });
 
