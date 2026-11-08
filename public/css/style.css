@@ -333,10 +333,12 @@ input[type='time']::-webkit-calendar-picker-indicator:hover {
     background 0.15s;
 }
 .date-nav-label::before {
-  content: '📅';
+  content: '历';
   margin-right: 6px;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 700;
   vertical-align: -1px;
+  color: var(--accent-dark);
 }
 .date-nav-label:hover {
   border-color: #c9ccd1;
@@ -1085,6 +1087,64 @@ body::before {
   transform: scale(1.008);
 }
 
+/* 工具箱：页码范围输入（留空 = 全部页） */
+.pdf-range-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.pdf-range-label {
+  font-size: 13px;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+.pdf-range-input {
+  flex: 0 1 220px;
+  min-width: 160px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition:
+    border-color 0.18s,
+    box-shadow 0.18s;
+}
+.pdf-range-input::placeholder {
+  color: var(--text-soft);
+}
+.pdf-range-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--nav-active);
+}
+.pdf-range-input:disabled {
+  background: var(--gray-light);
+  color: var(--text-soft);
+  cursor: not-allowed;
+}
+.pdf-range-input.is-invalid {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.12);
+}
+.pdf-range-hint {
+  font-size: 12px;
+  color: var(--text-soft);
+  flex: 1 1 auto;
+}
+.pdf-range-input.is-invalid + .pdf-range-hint {
+  color: var(--red);
+}
+.pdf-result-scope {
+  font-size: 12px;
+  color: var(--text-soft);
+  margin-top: 6px;
+}
+
 /* ---------- 工具箱：Git 指南 ---------- */
 .git-search {
   display: flex;
@@ -1486,4 +1546,149 @@ textarea:focus {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ==========================================================================
+   国风 UI/UX 精修（第二轮）：按钮 · 图标 · 微观质感（纯样式层）
+   设计语言：篆印导航图标 + 朱砂质感按钮 + 国风字符点缀
+   约束：不改变任何 DOM 结构、事件与功能逻辑
+   ========================================================================== */
+
+/* ---------- 篆印导航图标：汉字印章 ---------- */
+.nav-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-family: 'Songti SC', 'STSong', 'Noto Serif SC', 'SimSun', serif;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent-dark);
+  border-radius: 8px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.92), var(--gray-light));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+    0 2px 5px -3px rgba(74, 42, 49, 0.4);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
+  transition:
+    background 0.18s,
+    color 0.18s,
+    border-color 0.18s,
+    box-shadow 0.18s,
+    transform 0.18s;
+}
+.nav-item:hover .nav-icon {
+  color: var(--accent-dark);
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  transform: translateY(-1px);
+}
+.nav-item.active .nav-icon {
+  background: linear-gradient(160deg, #d37a8e, var(--accent-dark));
+  border-color: transparent;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(74, 42, 49, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 10px -4px rgba(194, 91, 114, 0.65);
+}
+
+/* ---------- 关闭按钮：国风「阖」印记 ---------- */
+.close-workbench-btn > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: inherit;
+  opacity: 0.78;
+  transition: opacity 0.15s;
+}
+.close-workbench-btn:hover > span {
+  opacity: 1;
+  color: #fff;
+}
+
+/* ---------- 按钮：朱砂质感 ---------- */
+.btn {
+  position: relative;
+  letter-spacing: 0.03em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+.btn-primary {
+  overflow: hidden;
+  text-shadow: 0 1px 2px rgba(74, 42, 49, 0.26);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 8px 20px -10px rgba(194, 91, 114, 0.75);
+}
+.btn-primary:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 10px 24px -10px rgba(194, 91, 114, 0.8);
+}
+.btn-danger {
+  overflow: hidden;
+  text-shadow: 0 1px 2px rgba(74, 20, 20, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 8px 20px -10px rgba(220, 79, 79, 0.65);
+}
+.btn-danger:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 10px 24px -10px rgba(220, 79, 79, 0.7);
+}
+/* 主按钮/危险按钮顶部高光（釉面反光），纯装饰层，pointer-events:none 不拦截点击 */
+.btn-primary::after,
+.btn-danger::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 52%);
+  pointer-events: none;
+}
+.btn:disabled::after {
+  display: none;
+}
+/* 图标小按钮：hover 描金内环，呼应印章描边 */
+.btn-icon:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+.btn-ghost:hover {
+  color: var(--accent-dark);
+}
+.btn-sm {
+  letter-spacing: 0.03em;
+}
+
+/* ---------- 标签页：激活态顶部高光 ---------- */
+.tab {
+  position: relative;
+}
+.tab.active {
+  overflow: hidden;
+}
+.tab.active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 55%);
+  pointer-events: none;
+}
+
+/* ---------- 原生控件点缀：主题色 accent ---------- */
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'] {
+  accent-color: var(--accent);
 }

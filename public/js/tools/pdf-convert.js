@@ -2,6 +2,8 @@
 // 本机 Node 服务通过子进程调用 Python（python/pdf_convert.py）转换为真实格式
 // 浏览器端只做上传 / 下载 / 预览，不加载任何外部 CDN
 
+import { parsePageSelection, describePageSelection } from './page-range.js';
+
 export const FORMAT_OPTIONS = [
   {
     id: 'word',
@@ -55,13 +57,16 @@ export function validatePdfFile(file) {
 /**
  * 构造转换请求 URL（纯函数，Node 可单测）
  * 只有 Word / PPT 支持 layout=1；其它格式忽略该参数。
+ * pages 传紧凑页码串（如 "2-3"），留空表示全部页。
  * @param {string} token
  * @param {string} format
  * @param {boolean} layout
+ * @param {string} [pages]
  */
-export function buildConvertUrl(token, format, layout = true) {
+export function buildConvertUrl(token, format, layout = true, pages = '') {
   const params = new URLSearchParams({ token: token || '', format: format || '' });
   if (layout && (format === 'word' || format === 'ppt')) params.set('layout', '1');
+  if (pages) params.set('pages', pages);
   return `/api/tools/pdf/convert?${params.toString()}`;
 }
 
@@ -137,6 +142,45 @@ function renderPdfConvert(container) {
   layoutRow.append(layoutCheckbox, layoutText);
   container.append(layoutRow);
 
+  // 页码范围（留空 = 全部页；仅转换选中的页）
+  const rangeRow = document.createElement('div');
+  rangeRow.className = 'pdf-range-row';
+  const rangeLabel = document.createElement('label');
+  rangeLabel.className = 'pdf-range-label';
+  rangeLabel.htmlFor = 'pdf-page-range';
+  rangeLabel.textContent = '页码范围';
+  const pageInput = document.createElement('input');
+  pageInput.type = 'text';
+  pageInput.id = 'pdf-page-range';
+  pageInput.className = 'pdf-range-input';
+  pageInput.placeholder = '留空 = 全部页，例如 1-3,5';
+  pageInput.disabled = true;
+  pageInput.setAttribute('aria-label', '页码范围');
+  pageInput.autocomplete = 'off';
+  const rangeHint = document.createElement('span');
+  rangeHint.className = 'pdf-range-hint';
+  rangeHint.textContent = '上传后填写';
+  rangeRow.append(rangeLabel, pageInput, rangeHint);
+  container.append(rangeRow);
+
+  // 输入即校验：格式/越界立刻提示，避免点了转换才知道出错
+  pageInput.oninput = () => {
+    const raw = pageInput.value.trim();
+    if (!raw) {
+      rangeHint.textContent = currentNumPages ? `共 ${currentNumPages} 页 · 全部转换` : '上传后填写';
+      pageInput.classList.remove('is-invalid');
+      return;
+    }
+    const check = parsePageSelection(raw, currentNumPages);
+    if (check.ok) {
+      rangeHint.textContent = `已选 ${check.pages.length} 页`;
+      pageInput.classList.remove('is-invalid');
+    } else {
+      rangeHint.textContent = check.message;
+      pageInput.classList.add('is-invalid');
+    }
+  };
+
   // 转换按钮区
   const btnRow = document.createElement('div');
   btnRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center;';
@@ -165,6 +209,10 @@ function renderPdfConvert(container) {
     if (dropDivs[1]) dropDivs[1].textContent = '支持 .pdf 格式，最大 200MB';
     status.textContent = '';
     resultArea.innerHTML = '';
+    pageInput.value = '';
+    pageInput.disabled = true;
+    pageInput.classList.remove('is-invalid');
+    rangeHint.textContent = '上传后填写';
     fmtBtns.forEach((b) => {
       b.disabled = true;
     });
@@ -198,6 +246,10 @@ function renderPdfConvert(container) {
     currentFile = file;
     currentToken = null;
     currentNumPages = 0;
+    pageInput.value = '';
+    pageInput.disabled = true;
+    pageInput.classList.remove('is-invalid');
+    rangeHint.textContent = '解析中...';
     status.textContent = '⏳ 正在上传并解析 PDF...';
     resultArea.innerHTML = '';
     const dropDivs = dropZone.querySelectorAll('div');
@@ -225,7 +277,9 @@ function renderPdfConvert(container) {
       }
       currentToken = data.token;
       currentNumPages = data.numPages || 0;
-      status.textContent = `✅ 已加载「${file.name}」— 共 ${data.numPages} 页，可选择转换格式`;
+      pageInput.disabled = false;
+      rangeHint.textContent = `共 ${currentNumPages} 页 · 全部转换`;
+      status.textContent = `✅ 已加载「${file.name}」— 共 ${data.numPages} 页，可选择页码与转换格式`;
       fmtBtns.forEach((b) => {
         b.disabled = false;
       });
@@ -240,13 +294,23 @@ function renderPdfConvert(container) {
 
   async function doConvert(fmt) {
     if (!currentToken) return;
-    status.textContent = `⏳ 正在转换为 ${fmt.label}...`;
+    // 页码先校验：非法输入不发起请求，也不消耗会话
+    const selection = parsePageSelection(pageInput.value, currentNumPages);
+    if (!selection.ok) {
+      status.textContent = `❌ ${selection.message}`;
+      pageInput.classList.add('is-invalid');
+      pageInput.focus();
+      return;
+    }
+    const pageParam = selection.all ? '' : describePageSelection(selection.pages);
+    const scopeText = pageParam ? `第 ${pageParam} 页` : `全部 ${currentNumPages} 页`;
+    status.textContent = `⏳ 正在转换${scopeText}为 ${fmt.label}...`;
     resultArea.innerHTML = '';
     setFmtButtonsEnabled(false);
 
     const keepLayout = layoutCheckbox.checked && (fmt.id === 'word' || fmt.id === 'ppt');
     try {
-      const resp = await fetch(buildConvertUrl(currentToken, fmt.id, keepLayout));
+      const resp = await fetch(buildConvertUrl(currentToken, fmt.id, keepLayout, pageParam));
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
         status.textContent =
@@ -255,6 +319,7 @@ function renderPdfConvert(container) {
       }
       const blob = await resp.blob();
       const baseName = currentFile?.name?.replace(/\.pdf$/i, '') || 'output';
+      const suffix = pageParam ? `-p${pageParam}` : '';
       const url = URL.createObjectURL(blob);
       const sizeMb =
         blob.size >= 1024 * 1024
@@ -262,25 +327,34 @@ function renderPdfConvert(container) {
           : `${Math.max(1, Math.round(blob.size / 1024))} KB`;
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${baseName}${fmt.ext}`;
+      link.download = `${baseName}${suffix}${fmt.ext}`;
       link.className = 'btn btn-primary';
       link.textContent = `⬇ 下载 ${fmt.label}（${sizeMb}）`;
       link.style.cssText = 'display:inline-block;margin-top:8px;';
       resultArea.append(link);
 
-      // 图片：逐页预览（复用本机转换好的 PNG）
+      // 选页时明确提示本次转换范围，避免误以为导出了整份文档
+      if (pageParam) {
+        const scope = document.createElement('div');
+        scope.className = 'pdf-result-scope';
+        scope.textContent = `已转换 ${scopeText}（共 ${currentNumPages} 页）`;
+        resultArea.append(scope);
+      }
+
+      // 图片：逐页预览（只预览本次转换的页）
       if (fmt.id === 'image') {
         const preview = document.createElement('div');
         preview.style.cssText = 'display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;';
-        for (let i = 1; i <= currentNumPages; i++) {
+        const pagesToShow = selection.all ? Array.from({ length: currentNumPages }, (_, i) => i + 1) : selection.pages;
+        for (const p of pagesToShow) {
           const wrap = document.createElement('div');
           wrap.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:8px;';
           const imgEl = document.createElement('img');
-          imgEl.src = `/api/tools/pdf/page?token=${encodeURIComponent(currentToken)}&page=${i}`;
+          imgEl.src = `/api/tools/pdf/page?token=${encodeURIComponent(currentToken)}&page=${p}`;
           imgEl.style.cssText = 'width:100%;max-width:260px;border-radius:4px;';
           const cap = document.createElement('div');
           cap.style.cssText = 'font-size:12px;color:var(--text-soft);text-align:center;margin-top:4px;';
-          cap.textContent = `第 ${i} 页`;
+          cap.textContent = `第 ${p} 页`;
           wrap.append(imgEl, cap);
           preview.append(wrap);
         }
@@ -308,7 +382,7 @@ function renderPdfConvert(container) {
         resultArea.append(hint);
       }
 
-      status.textContent = `✅ 转换完成 — ${fmt.label}`;
+      status.textContent = pageParam ? `✅ 转换完成 — ${fmt.label}（${scopeText}）` : `✅ 转换完成 — ${fmt.label}`;
     } catch (e) {
       status.textContent = `❌ 转换失败: ${e.message}`;
     } finally {

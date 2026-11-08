@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { createApp, createPdfTokenStore, PdfHttpError } from '../server.js';
+import { createApp, createPdfTokenStore, createDefaultPdfTool, buildPdfConvertPlan, PdfHttpError } from '../server.js';
 
 // ---------- Mock 最小 DOM 环境（consult.js 需在 Node 下可导入） ----------
 if (typeof globalThis.document === 'undefined') {
@@ -154,6 +154,19 @@ test('PDF 转换：buildConvertUrl 仅对 Word/PPT 追加 layout=1', () => {
   assert.equal(buildConvertUrl('tok', 'md'), '/api/tools/pdf/convert?token=tok&format=md');
 });
 
+test('PDF 转换：buildConvertUrl 追加 pages（选页），留空则不带该参数', () => {
+  assert.equal(
+    buildConvertUrl('tok', 'word', true, '2-3'),
+    '/api/tools/pdf/convert?token=tok&format=word&layout=1&pages=2-3',
+  );
+  assert.equal(
+    buildConvertUrl('tok', 'excel', false, '1,4'),
+    '/api/tools/pdf/convert?token=tok&format=excel&pages=1%2C4',
+  );
+  assert.ok(!buildConvertUrl('tok', 'word', true, '').includes('pages='));
+  assert.ok(!buildConvertUrl('tok', 'word', true).includes('pages='));
+});
+
 test('PDF 转换：默认开启“保留原版式”，并说明 Word/PPT 生效', async () => {
   const src = await (
     await import('node:fs/promises')
@@ -220,7 +233,7 @@ function createMockPdfTool() {
       return { token: 'tok123', numPages: 3 };
     },
     async convert(token, format, options = {}) {
-      calls.convert.push({ token, format, layout: Boolean(options.layout) });
+      calls.convert.push({ token, format, layout: Boolean(options.layout), pages: options.pages ?? '' });
       if (format === 'word') {
         return {
           buffer: Buffer.from('fake-docx-content'),
@@ -344,7 +357,7 @@ test('GET /api/tools/pdf/convert：成功返回文件字节与下载头', async 
     assert.ok(cd.includes(encodeURIComponent('测试文档.docx')), '文件名应 UTF-8 编码');
     const bytes = new Uint8Array(await resp.arrayBuffer());
     assert.equal(Buffer.from(bytes).toString(), 'fake-docx-content');
-    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'word', layout: false });
+    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'word', layout: false, pages: '' });
   });
 });
 
@@ -353,8 +366,94 @@ test('GET /api/tools/pdf/convert：layout=1 透传给工具层', async () => {
   await withApp(tool, {}, async (base) => {
     const resp = await fetch(`${base}/api/tools/pdf/convert?token=tok123&format=word&layout=1`);
     assert.equal(resp.status, 200);
-    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'word', layout: true });
+    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'word', layout: true, pages: '' });
   });
+});
+
+// ---------- 按页码转换（pages 参数） ----------
+test('GET /api/tools/pdf/convert：pages 参数原样透传给工具层', async () => {
+  const tool = createMockPdfTool();
+  await withApp(tool, {}, async (base) => {
+    const resp = await fetch(`${base}/api/tools/pdf/convert?token=tok123&format=word&pages=2-3`);
+    assert.equal(resp.status, 200);
+    assert.equal(tool.calls.convert[0].pages, '2-3');
+  });
+});
+
+test('GET /api/tools/pdf/convert：页码范围非法 → 400 JSON（不应落到 500）', async () => {
+  const tool = createMockPdfTool();
+  tool.convert = async () => {
+    throw new PdfHttpError(400, '页码超出范围：9（共 3 页）');
+  };
+  await withApp(tool, {}, async (base) => {
+    const resp = await fetch(`${base}/api/tools/pdf/convert?token=tok123&format=word&pages=9`);
+    assert.equal(resp.status, 400);
+    assert.match((await resp.json()).error, /超出范围/);
+  });
+});
+
+test('默认 PDF 工具：页码越界在调用 Python 前就被拒绝（不启动子进程）', async () => {
+  const tool = createDefaultPdfTool();
+  const token = tool.store.add({ file: path.join(os.tmpdir(), 'not-exist.pdf'), originalName: 'a.pdf', numPages: 3 });
+  await assert.rejects(() => tool.convert(token, 'word', { pages: '9' }), /超出范围/);
+  await assert.rejects(() => tool.convert(token, 'word', { pages: '0' }), /超出范围/);
+  await assert.rejects(() => tool.convert(token, 'word', { pages: '3-1' }), /起始页不能大于结束页/);
+  await assert.rejects(() => tool.convert(token, 'word', { pages: 'abc' }), /格式不正确/);
+});
+
+// ---------- 转换计划（纯函数）：参数拼装与文件名后缀 ----------
+const plan = (over = {}) =>
+  buildPdfConvertPlan({
+    inFile: '/tmp/in.pdf',
+    outFile: '/tmp/out.docx',
+    format: 'word',
+    numPages: 5,
+    ...over,
+  });
+
+test('转换计划：未指定页码时不下发 --pages，文件名无后缀', () => {
+  const p = plan();
+  assert.equal(p.isSubset, false);
+  assert.equal(p.suffix, '');
+  assert.ok(p.args[0].endsWith('pdf_convert.py'));
+  assert.deepEqual(p.args.slice(1), ['/tmp/in.pdf', '/tmp/out.docx', '--format', 'word']);
+});
+
+test('转换计划：选中部分页时下发归一化后的 --pages 并给文件名加 -p 后缀', () => {
+  const p = plan({ pages: '5,1-2' });
+  assert.equal(p.isSubset, true);
+  assert.deepEqual(p.args.slice(-2), ['--pages', '1,2,5']);
+  assert.equal(p.suffix, '-p1-2,5');
+});
+
+test('转换计划：全角输入也会归一化', () => {
+  assert.deepEqual(plan({ pages: '2－3' }).args.slice(-2), ['--pages', '2,3']);
+});
+
+test('转换计划：选满全部页等价于不限定（不拼 --pages、无后缀）', () => {
+  const p = plan({ pages: '1-5' });
+  assert.equal(p.isSubset, false);
+  assert.equal(p.suffix, '');
+  assert.ok(!p.args.includes('--pages'));
+  assert.equal(plan({ pages: '1,2,3,4,5' }).isSubset, false);
+});
+
+test('转换计划：--layout 只对 word / ppt 生效，与 --pages 可共存', () => {
+  const docx = plan({ layout: true, pages: '2' });
+  assert.ok(docx.args.includes('--layout'));
+  assert.equal(docx.args[docx.args.length - 2], '--pages');
+  assert.ok(plan({ format: 'excel', outFile: '/tmp/o.xlsx', layout: true }).args.includes('--layout') === false);
+});
+
+test('转换计划：页码非法抛 400 级 PdfHttpError（不落到 500）', () => {
+  try {
+    plan({ pages: '9' });
+    assert.fail('应抛错');
+  } catch (e) {
+    assert.ok(e instanceof PdfHttpError);
+    assert.equal(e.status, 400);
+    assert.match(e.message, /超出范围/);
+  }
 });
 
 test('GET /api/tools/pdf/convert：Markdown 成功返回 UTF-8 字节与下载头', async () => {
@@ -368,7 +467,7 @@ test('GET /api/tools/pdf/convert：Markdown 成功返回 UTF-8 字节与下载�
     assert.ok(cd.includes(encodeURIComponent('测试文档.md')), '文件名应 UTF-8 编码且为 .md');
     const text = await resp.text();
     assert.equal(text, '# 标题\n\n正文内容');
-    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'md', layout: false });
+    assert.deepEqual(tool.calls.convert[0], { token: 'tok123', format: 'md', layout: false, pages: '' });
   });
 });
 

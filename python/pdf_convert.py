@@ -12,6 +12,7 @@
 转换策略(相对"整页截图"式转换):
   - 版面结构:按字号推断标题层级,同段落折行合并,列表/编号项识别,真实表格还原
   - 可编辑优先:Word / PPT / Excel 输出可编辑结构,仅扫描件(整页无文字)才嵌入整页图片
+  - 文本格式:粗体/斜体/等宽/字号/颜色/原字体名写入对应 run;超链接保留为可点击链接
   - 去噪:多页文档中位于页边且重复出现的内容与纯页码自动剔除
   - 清晰度:图片按 3x 渲染(约 216 DPI),文档内嵌图用较低倍率控制体积
 """
@@ -40,6 +41,7 @@ import pymupdf as fitz  # 官方导入名;fitz 别名会触发弃用警告污染
 # ---------- 常量 ----------
 
 RENDER_SCALE = 3.0  # 图片导出/预览渲染倍率(A4 约 1785×2526,≈216 DPI)
+BODY_SIZE_SAMPLE_PAGES = 30  # 统计正文字号时最多采样前 N 页(避免大文档被多解析一遍)
 EMBED_SCALE = 2.0  # 文档内嵌整页图(扫描件兜底)倍率,控制文件体积
 # 单页渲染像素上限:恶意/异常 PDF 可声明上万点的超大 MediaBox,按固定倍率渲染会申请数十 GB
 # 内存并把进程拖死(本地拒绝服务)。改为按像素预算动态降倍率,正常 A4(≈4.5MP)不受影响。
@@ -55,6 +57,7 @@ HEADING_MARK_MAX = 6  # Markdown 最多支持 6 级标题
 
 # 文本拼接
 BULLET_CHARS = "\u2022\u00b7\uf0b7"  # • · 等常见项目符号
+CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 LIST_NUMBER_RE = re.compile(r"^\s*(?:\d{1,3}|[一二三四五六七八九十]{1,3})\s*[.)、](?!\d)\s*")
 CJK_NO_SPACE_BEFORE = "，。、；：！？）》」』】”’,.!?;:%)]}"
 CJK_NO_SPACE_AFTER = "（《「『【“‘([{"
@@ -89,6 +92,7 @@ MD_IMAGE_WIDTH_LIMIT = 480.0
 MD_IMAGE_BYTES_CAP = 250_000
 MD_IMAGE_MAX_SCALE = 2.0
 MD_IMAGE_MIN_SIDE = 2.0
+MD_IMAGE_FALLBACK_TEXT = "（图片省略）"  # 图片无法内嵌时用文字说明,不输出坏链接
 
 # Word
 DOCX_BODY_FONT = "Microsoft YaHei"
@@ -113,6 +117,9 @@ XLSX_HEADER_FILL = "F2EDE7"
 XLSX_EMPTY_SHEET = "空文档"
 NUMERIC_CELL_RE = re.compile(r"^(?P<sign>-)?(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?P<frac>\.\d+)?$")
 CURRENCY_SYMBOLS = "¥$€£"
+
+# 超链接白名单:只允许 http/https/mailto,杜绝 javascript: 等协议进入转换结果
+SAFE_LINK_RE = re.compile(r"^(?:https?://|mailto:)\S+", re.IGNORECASE)
 
 # PPT
 PPTX_SLIDE_WIDTH_IN = 13.333
@@ -153,6 +160,7 @@ class Run:
     link: str | None = None
     size: float = 0.0  # PDF 原始字号(pt),0 表示未知
     color: tuple[int, int, int] | None = None
+    font: str | None = None  # PDF 原始字体名(未清洗),None 表示未知
 
 
 @dataclass
@@ -167,6 +175,7 @@ class Block:
     image: bytes | None = None
     bbox: BBox = (0.0, 0.0, 0.0, 0.0)
     ordered: bool = False
+    start: int = 0  # 有序列表的原始序号(0 = 未知);用于让编号从原文档的序号接续
     size: float = 0.0  # 标题/图片块的代表字号(pt)
     align: str = "left"  # 推断的段落对齐:left / center / right
 
@@ -306,6 +315,7 @@ def _span_runs(spans: list[dict], link_targets: list[tuple[fitz.Rect, str]]) -> 
             mono=bool(flags & MONO_FLAG),
             size=size,
             color=_int_to_rgb(span.get("color")) if "color" in span else None,
+            font=(span.get("font") or None) if isinstance(span.get("font"), str) else None,
         )
         rect = _safe_rect(span.get("bbox"))
         if rect is not None:
@@ -320,35 +330,64 @@ def _span_runs(spans: list[dict], link_targets: list[tuple[fitz.Rect, str]]) -> 
     return runs
 
 
+def _md_safe_link(url: str | None) -> str | None:
+    """超链接进入 markdown 前的安全处理:协议白名单校验 + 括号转义。
+
+   javascript: 等非 http/https/mailto 协议返回 None(退回纯文本);
+    URL 中的括号按 RFC 3986 百分号转义,避免提前闭合链接语法。
+    """
+    link = (url or "").strip()
+    return link.replace("(", "%28").replace(")", "%29") if SAFE_LINK_RE.match(link) else None
+
+
 def _render_inline(runs: list[Run]) -> str:
-    """Run 列表 -> 内联 markdown(加粗/斜体/等宽/链接)。"""
-    parts = []
+    """Run 列表 -> 内联 markdown(加粗/斜体/等宽/链接)。
+
+    样式标记只包住非空白文本:空白留在 `** text **` 这类标记外面,
+    否则多数 CommonMark 渲染器不把两侧带空格的星号识别为强调。
+    """
+    parts: list[str] = []
     for run in runs:
         text = run.text
         if not text:
             continue
+        core = text.strip()
+        if not core:
+            parts.append(text)
+            continue
+        lead = text[: len(text) - len(text.lstrip())]
+        trail = text[len(text.rstrip()) :]
         if run.mono:
-            text = f"`{text}`"
+            core = f"`{core}`"
         if run.bold:
-            text = f"**{text}**"
+            core = f"**{core}**"
         if run.italic:
-            text = f"*{text}*"
-        if run.link:
-            text = f"[{text}]({run.link})"
-        parts.append(text)
+            core = f"*{core}*"
+        safe_link = _md_safe_link(run.link)
+        if safe_link:
+            core = f"[{core}]({safe_link})"
+        parts.append(lead + core + trail)
     return "".join(parts).strip()
 
 
 # ---------- 版面结构提取 ----------
 
 
-def _body_font_size(raw_blocks: list[dict]) -> float:
-    """正文中位字号:按字符数加权,并在接近高频的字号中取最小值。
+def _pick_body_size(sizes: Counter[float]) -> float:
+    """从「字号 -> 字符数」直方图中挑出正文基准字号。
 
     短文档里标题字数可能接近正文,只取「最常见字号」会把 22pt 标题误判为正文,
     进而把 16pt 小节误判成列表;取高频字号中的最小值可稳定落在正文上。
     """
-    sizes: Counter[float] = Counter()
+    if not sizes:
+        return DEFAULT_FONT_SIZE
+    maximum = max(sizes.values())
+    candidates = [size for size, count in sizes.items() if count >= maximum * 0.5]
+    return min(candidates)
+
+
+def _count_span_sizes(raw_blocks: list[dict], sizes: Counter[float]) -> None:
+    """把一页文本 span 的字号累计进直方图(图片块跳过)。"""
     for block in raw_blocks:
         if block.get("type") != 0:
             continue
@@ -358,11 +397,63 @@ def _body_font_size(raw_blocks: list[dict]) -> float:
                 if text:
                     size = float(span.get("size", DEFAULT_FONT_SIZE) or DEFAULT_FONT_SIZE)
                     sizes[round(size, 1)] += len(text)
-    if not sizes:
-        return DEFAULT_FONT_SIZE
-    maximum = max(sizes.values())
-    candidates = [size for size, count in sizes.items() if count >= maximum * 0.5]
-    return min(candidates)
+
+
+def _body_font_size(raw_blocks: list[dict]) -> float:
+    """单页正文基准字号(无整份文档上下文时的兜底)。"""
+    sizes: Counter[float] = Counter()
+    _count_span_sizes(raw_blocks, sizes)
+    return _pick_body_size(sizes)
+
+
+def _segment_in_margin(bbox, height: float) -> bool:
+    """文本行是否落在页边(页眉/页脚)区域;缺信息时按「不在页边」处理。"""
+    if not height or not bbox:
+        return False
+    try:
+        top, bottom = float(bbox[1]), float(bbox[3])
+    except (TypeError, ValueError, IndexError):
+        return False
+    return bottom <= height * PAGE_MARGIN_RATIO or top >= height * (1 - PAGE_MARGIN_RATIO)
+
+
+def _body_size_pages(doc: fitz.Document):
+    """统计字号时要扫描的页:最多 BODY_SIZE_SAMPLE_PAGES 页。"""
+    for index, page in enumerate(doc):
+        if index >= BODY_SIZE_SAMPLE_PAGES:
+            break
+        yield page
+
+
+def _document_body_size(doc: fitz.Document) -> float:
+    """整份文档的正文基准字号:跨页统一统计,并排除页眉/页脚。
+
+    单页统计会被页边小字带偏:某页正文只有两行、页眉页脚却是 9pt 时,
+    9pt 的字符数反而占优,12pt 正文就显得「比正文大 15%」而被误判成标题
+    (Word 里变 Heading、Markdown 里变 ###、PPT 里进标题区)。
+    跨页聚合让正文在整份文档中始终是字数量级最大的一档,页边文本再单独排除。
+    只采样前 BODY_SIZE_SAMPLE_PAGES 页:正文字号在同一份文档中几乎不变,
+    而整份重解析会让大文档的转换耗时翻倍(也是一种放大攻击面)。
+    """
+    sizes: Counter[float] = Counter()
+    for page in _body_size_pages(doc):
+        height = float(page.rect.height)
+        try:
+            raw_blocks = page.get_text("dict").get("blocks", [])
+        except Exception:  # noqa: BLE001 - 取字号只为分类,失败按默认字号处理
+            continue
+        for block in raw_blocks:
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                if _segment_in_margin(line.get("bbox"), height):
+                    continue  # 页眉/页脚不参与正文判定
+                for span in line.get("spans", []):
+                    text = span.get("text")
+                    if text:
+                        size = float(span.get("size", DEFAULT_FONT_SIZE) or DEFAULT_FONT_SIZE)
+                        sizes[round(size, 1)] += len(text)
+    return _pick_body_size(sizes)
 
 
 def _strip_list_marker(text: str) -> str:
@@ -372,6 +463,26 @@ def _strip_list_marker(text: str) -> str:
         return stripped[1:].lstrip()
     match = LIST_NUMBER_RE.match(stripped)
     return stripped[match.end() :].lstrip() if match else stripped
+
+
+def _list_marker_number(text: str) -> int:
+    """取出列表行首编号的数值(阿拉伯数字或中文数字),取不到返回 0。
+
+    编号在提取阶段被剥离,但「这组列表从几开始」仍需保留:
+    两组独立列表都应从 1 开始,而跨页续写的列表应从 3、4 继续。
+    """
+    stripped = (text or "").lstrip()
+    match = LIST_NUMBER_RE.match(stripped)
+    if not match:
+        return 0
+    token = stripped[: match.end()].strip().rstrip(".)、").strip()
+    if token.isdigit():
+        return int(token)
+    if token in CN_DIGITS:
+        return CN_DIGITS[token]
+    if token[:1] == "十" and token[1:] in CN_DIGITS:  # 十一 ~ 十九
+        return 10 + CN_DIGITS[token[1:]]
+    return 0
 
 
 def _strip_marker_runs(runs: list[Run]) -> list[Run]:
@@ -397,6 +508,7 @@ def _strip_marker_runs(runs: list[Run]) -> list[Run]:
                     link=run.link,
                     size=run.size,
                     color=run.color,
+                    font=run.font,
                 )
             )
     return out
@@ -465,7 +577,14 @@ def _blocks_from_text_block(raw: dict, body_size: float, link_targets: list[tupl
             flush()
             item = _strip_list_marker(first)
             blocks.append(
-                Block("list", text=item, runs=_strip_marker_runs(runs), bbox=bbox, ordered=ordered)
+                Block(
+                    "list",
+                    text=item,
+                    runs=_strip_marker_runs(runs),
+                    bbox=bbox,
+                    ordered=ordered,
+                    start=_list_marker_number(first) if ordered else 0,
+                )
             )
             continue
 
@@ -569,10 +688,11 @@ def _merge_continuous_blocks(blocks: list[Block]) -> list[Block]:
     return merged
 
 
-def _parse_raw_blocks(raw_blocks: list[dict], links=None) -> list[Block]:
-    """PyMuPDF dict blocks -> 语义块列表(含图片块)。"""
+def _parse_raw_blocks(raw_blocks: list[dict], links=None, body_size: float | None = None) -> list[Block]:
+    """PyMuPDF dict blocks -> 语义块列表(含图片块);body_size 为整份文档的正文基准字号。"""
     link_targets = _link_targets(links)
-    body_size = _body_font_size(raw_blocks)
+    if not body_size or body_size <= 0:  # 调用方未提供文档级基准时退回单页统计
+        body_size = _body_font_size(raw_blocks)
     blocks: list[Block] = []
     for raw in raw_blocks:
         if raw.get("type") == 1:
@@ -623,8 +743,11 @@ def _center_inside(inner: BBox, outer: BBox) -> bool:
     return outer[0] <= center_x <= outer[2] and outer[1] <= center_y <= outer[3]
 
 
-def _extract_blocks(page: fitz.Page) -> list[Block]:
-    """单页 -> 语义块列表(按阅读顺序排序,表格区域内的文字不会重复输出)。"""
+def _extract_blocks(page: fitz.Page, body_size: float | None = None) -> list[Block]:
+    """单页 -> 语义块列表(按阅读顺序排序,表格区域内的文字不会重复输出)。
+
+    body_size:整份文档的正文基准字号;不传则按本页统计(可能被页眉页脚带偏)。
+    """
     try:
         raw_blocks = page.get_text("dict").get("blocks", [])
     except Exception as exc:
@@ -635,7 +758,7 @@ def _extract_blocks(page: fitz.Page) -> list[Block]:
         links = []
 
     tables = _table_blocks(page)
-    blocks = _parse_raw_blocks(raw_blocks, links) + tables
+    blocks = _parse_raw_blocks(raw_blocks, links, body_size) + tables
     if tables:
         blocks = [
             block
@@ -649,14 +772,39 @@ def _extract_blocks(page: fitz.Page) -> list[Block]:
     return blocks
 
 
+def _list_prefixes(blocks: list[Block]) -> dict[int, str]:
+    """按顺序算出每个列表块的前缀("• " 或 "3. ");非列表块不出现在结果里。
+
+    提取阶段为了给 Word 写真实列表而剥掉了符号,纯文本/PPT 这类只能写字符串的
+    输出必须自己补回来,否则项目符号与编号整体消失、层级看不出来。
+    有序列表优先用块上记录的原始序号,没有记录时按上一条递增。
+    """
+    prefixes: dict[int, str] = {}
+    number = 0
+    for index, block in enumerate(blocks):
+        if block.kind != "list":
+            number = 0
+            continue
+        if block.ordered:
+            number = block.start or number + 1
+            prefixes[index] = f"{number}. "
+        else:
+            number = 0
+            prefixes[index] = "• "
+    return prefixes
+
+
 def _blocks_to_text(blocks: list[Block]) -> str:
-    """语义块 -> 纯文本(表格用制表符分列,便于粘贴到 Excel)。"""
+    """语义块 -> 纯文本(表格用制表符分列,列表带 • / 序号,便于粘贴后仍认得出层级)。"""
+    prefixes = _list_prefixes(blocks)
     lines = []
-    for block in blocks:
+    for index, block in enumerate(blocks):
         if block.kind == "table":
             lines.extend("\t".join(row) for row in block.rows)
-        elif block.kind != "image" and block.text:
-            lines.append(block.text)
+        elif block.kind == "image" or not block.text:
+            continue
+        else:
+            lines.append(prefixes.get(index, "") + block.text)
     return "\n".join(lines)
 
 
@@ -756,11 +904,79 @@ def count_pages(path: str) -> int:
         return len(doc)
 
 
+# 页码范围里常见的全角/中文符号统一成 ASCII,避免用户输入"1－3，5"时报格式错误
+_PAGE_SPEC_TRANS = str.maketrans(
+    {"－": "-", "—": "-", "–": "-", "~": "-", "～": "-", "，": ",", "、": ",", "；": ",", " ": "", "\u3000": ""}
+)
+
+
+def _page_number(text: str, total: int) -> int:
+    """把单个页码文本解析为 1-based 整数,非法或越界抛 PdfError。"""
+    if not text.isdigit():
+        raise PdfError(f"页码范围格式不正确: {text}(示例: 1-3,5)")
+    value = int(text)
+    if value < 1 or value > total:
+        raise PdfError(f"页码超出范围: {value}(共 {total} 页)")
+    return value
+
+
+def parse_page_range(spec, total: int) -> list[int]:
+    """解析页码范围,返回升序去重的 1-based 页号列表。
+
+    支持 ``"3"`` / ``"2-5"`` / ``"2-"``(到末页) / ``"-3"``(从首页) /
+    ``"1,3,5-7"``;``None`` 或空串表示全部页。全角符号与空格自动兼容。
+    越界、起止倒序、非数字一律抛 PdfError(中文提示)。
+    """
+    if total <= 0:
+        raise PdfError("无法获取页数,无法按页码转换")
+    text = str(spec if spec is not None else "").translate(_PAGE_SPEC_TRANS)
+    if not text:
+        return list(range(1, total + 1))
+    numbers: list[int] = []
+    for token in text.split(","):
+        if not token:
+            continue
+        if "-" in token:
+            start_text, _, end_text = token.partition("-")
+            start = _page_number(start_text or "1", total)
+            end = _page_number(end_text or str(total), total)
+            if start > end:
+                raise PdfError(f"起始页不能大于结束页: {token}")
+            numbers.extend(range(start, end + 1))
+        else:
+            numbers.append(_page_number(token, total))
+    if not numbers:
+        raise PdfError(f"页码范围无效: {spec}")
+    return sorted(set(numbers))
+
+
+def _resolve_page_numbers(spec, total: int) -> list[int]:
+    """把 None / 范围字符串 / 页号列表统一成升序去重的页号列表。"""
+    if spec is None:
+        return list(range(1, total + 1))
+    if isinstance(spec, (list, tuple, set)):
+        picked = sorted({int(n) for n in spec})
+        for n in picked:
+            if n < 1 or n > total:
+                raise PdfError(f"页码超出范围: {n}(共 {total} 页)")
+        return picked
+    return parse_page_range(spec, total)
+
+
+def _copy_pages(in_path: str, out_path: str, numbers: list[int]) -> None:
+    """把指定页按原顺序复制成新 PDF(供"保留原版式"模式复用既有实现)。"""
+    with _open_pdf(in_path) as src, fitz.open() as dst:
+        for n in numbers:
+            dst.insert_pdf(src, from_page=n - 1, to_page=n - 1)
+        dst.save(out_path)
+
+
 def extract_pages(
     path: str,
     scale: float = RENDER_SCALE,
     render_images=True,
     keep_blocks: bool = False,
+    page_numbers=None,
 ) -> list[Page]:
     """逐页提取文本 + (可选)渲染 PNG,返回 Page 列表。
 
@@ -770,14 +986,18 @@ def extract_pages(
         其它              -> 不渲染
     keep_blocks:
         True -> 额外提取语义块(标题/段落/列表/表格),并清理页眉页脚
+    page_numbers:
+        None -> 全部页;也可传 "1-3,5" 或 [1, 3];返回的 Page.num 始终是原始页号
     """
     mode = _normalize_image_mode(render_images)
     pages: list[Page] = []
     with _open_pdf(path) as doc:
-        for index in range(len(doc)):
-            page = doc[index]
+        # 正文基准字号必须跨整份文档统计,否则单页页眉页脚的小字会把正文误判成标题
+        body_size = _document_body_size(doc)
+        for num in _resolve_page_numbers(page_numbers, len(doc)):
+            page = doc[num - 1]
             raw_text = page.get_text("text") or ""
-            blocks = _extract_blocks(page) if keep_blocks else []
+            blocks = _extract_blocks(page, body_size) if keep_blocks else []
             png = None
             if mode == "all":
                 png = _render_png(page, scale)
@@ -785,7 +1005,7 @@ def extract_pages(
                 png = _render_png(page, min(scale, EMBED_SCALE))
             pages.append(
                 Page(
-                    num=index + 1,
+                    num=num,
                     text="" if keep_blocks else raw_text,  # 结构模式下由块派生,避免重复计算
                     png=png,
                     blocks=blocks,
@@ -892,22 +1112,40 @@ def _block_inline(block: Block) -> str:
 
 
 def _render_markdown_blocks(blocks: list[Block], image_fn: Callable[[Block], str | None] | None = None) -> str:
-    """语义块 -> markdown;块之间恰好一个空行。"""
+    """语义块 -> markdown:块之间一个空行,同一列表内的条目之间只换行。
+
+    列表项之间若插入空行,GFM 会渲染成 loose list(每项被包一层 <p>,间距变大),
+    看起来就是「多出来的空白」;这里让相邻的同类型列表项只用一个换行。
+    有序列表写真实序号而不是清一色的 "1.",保证纯文本阅读/粘贴时编号仍然正确。
+    """
     chunks: list[str] = []
+    previous_kind: str | None = None
+    last_number = 0
     for block in blocks:
         if block.kind == "image":
             chunk = image_fn(block) if image_fn else None
-            chunks.append(chunk or "![图片](data:,)")
+            kind = "image"
+            chunk = chunk or MD_IMAGE_FALLBACK_TEXT
         elif block.kind == "heading":
             marks = "#" * max(1, min(block.level, HEADING_MARK_MAX))
-            chunks.append(f"{marks} {_block_inline(block)}")
+            chunk, kind = f"{marks} {_block_inline(block)}", "heading"
         elif block.kind == "list":
-            chunks.append(("- " if not block.ordered else "1. ") + _block_inline(block))
+            if block.ordered:
+                last_number = block.start or (last_number + 1 if previous_kind == "list-ordered" else 1)
+                chunk, kind = f"{last_number}. {_block_inline(block)}", "list-ordered"
+            else:
+                chunk, kind = f"- {_block_inline(block)}", "list-bullet"
         elif block.kind == "table":
-            chunks.append(_render_md_table(block.rows))
+            chunk, kind = _render_md_table(block.rows), "table"
         else:
-            chunks.append(_block_inline(block))
-    return "\n\n".join(chunk for chunk in chunks if chunk.strip())
+            chunk, kind = _block_inline(block), "text"
+        if not chunk.strip():
+            continue
+        if chunks:
+            chunks.append("\n" if kind == previous_kind and kind.startswith("list") else "\n\n")
+        chunks.append(chunk)
+        previous_kind = kind
+    return "".join(chunks)
 
 
 def markdown_from_blocks(blocks: list[dict], links=None, image_fn=None) -> str:
@@ -917,17 +1155,21 @@ def markdown_from_blocks(blocks: list[dict], links=None, image_fn=None) -> str:
     return _render_markdown_blocks(parsed, image_fn)
 
 
-def _markdown_document(path: str) -> tuple[str, int]:
-    """整份 PDF -> (markdown, 页数);只打开文件一次(图片裁剪需要 page 上下文)。"""
+def _markdown_document(path: str, page_numbers=None) -> tuple[str, int]:
+    """PDF -> (markdown, 转换页数);只打开文件一次(图片裁剪需要 page 上下文)。
+
+    page_numbers 为 None 时转换全部页,否则仅转换指定页(页号仍显示原始页码)。
+    """
     with _open_pdf(path) as doc:
+        body_size = _document_body_size(doc)
         pages = []
-        for index in range(len(doc)):
-            page = doc[index]
+        for num in _resolve_page_numbers(page_numbers, len(doc)):
+            page = doc[num - 1]
             pages.append(
                 Page(
-                    num=index + 1,
+                    num=num,
                     text="",
-                    blocks=_extract_blocks(page),
+                    blocks=_extract_blocks(page, body_size),
                     height=float(page.rect.height),
                     width=float(page.rect.width),
                 )
@@ -942,7 +1184,7 @@ def _markdown_document(path: str) -> tuple[str, int]:
                 lambda block, current=doc[page_info.num - 1]: _image_markdown(current, block),
             )
             chunks.append(f"--- 第 {page_info.num} 页 ---\n{body.rstrip()}")
-        return "\n\n".join(chunks) + "\n", len(doc)
+        return "\n\n".join(chunks) + "\n", len(pages)
 
 
 def extract_markdown(path: str) -> str:
@@ -950,8 +1192,8 @@ def extract_markdown(path: str) -> str:
     return _markdown_document(path)[0]
 
 
-def _write_markdown(in_path: str, out_path: str) -> int:
-    text, num_pages = _markdown_document(in_path)
+def _write_markdown(in_path: str, out_path: str, page_numbers=None) -> int:
+    text, num_pages = _markdown_document(in_path, page_numbers=page_numbers)
     with open(out_path, "w", encoding="utf-8") as handle:
         handle.write(text)
     return num_pages
@@ -983,24 +1225,74 @@ def _docx_set_default_font(doc) -> None:
         pass
 
 
-def _docx_add_runs(paragraph, runs: list[Run]) -> None:
-    """按 run 写入文本,并尽量保留原文的字号与颜色。"""
+def _docx_set_run_font(run, name: str) -> None:
+    """同时设置 run 的西文与中文字体名;极简模板缺 rPr 结构时静默降级。"""
+    from docx.oxml.ns import qn
+
+    run.font.name = name
+    try:
+        run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), name)
+    except AttributeError:
+        pass
+
+
+def _docx_apply_run_style(target, run: Run) -> None:
+    """把 Run 的字体/粗体/斜体/等宽/字号/颜色写入 docx run,尽量保存原格式。"""
     from docx.shared import Pt, RGBColor
 
+    if run.bold:
+        target.bold = True
+    if run.italic:
+        target.italic = True
+    # 原字体名保留:去掉子集前缀后按 PDF 声明写回,不让全文都回退成默认字体。
+    # 已知默认正文字体名不重复设置,交给 Normal 样式;未声明字体的等宽 run 兜底 Consolas。
+    if run.font:
+        font_name = _layout_font_name(run.font)
+        if run.mono or (font_name and font_name != DOCX_BODY_FONT):
+            _docx_set_run_font(target, font_name)
+    elif run.mono:
+        _docx_set_run_font(target, DOCX_MONO_FONT)
+    if run.size > 0:
+        target.font.size = Pt(run.size)
+    if run.color:
+        target.font.color.rgb = RGBColor(*run.color)
+
+
+def _docx_add_hyperlink(paragraph, run: Run) -> None:
+    """把带链接的 Run 写成真正的 w:hyperlink(可点击),失败时退回普通文字。"""
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    link = (run.link or "").strip()
+    if not SAFE_LINK_RE.match(link):  # 协议白名单外(含 javascript:)一律退回普通文字
+        _docx_apply_run_style(paragraph.add_run(run.text), run)
+        return
+    try:
+        r_id = paragraph.part.relate_to(link, RT.HYPERLINK, is_external=True)
+    except Exception:  # noqa: BLE001 - 关系注册失败不应中断整篇转换
+        _docx_apply_run_style(paragraph.add_run(run.text), run)
+        return
+    styled = paragraph.add_run(run.text)
+    _docx_apply_run_style(styled, run)
+    styled.font.underline = True  # 超链接视觉特征,不覆盖原字号/颜色
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+    element = styled._element
+    element.getparent().remove(element)
+    hyperlink.append(element)
+    paragraph._p.append(hyperlink)
+
+
+def _docx_add_runs(paragraph, runs: list[Run]) -> None:
+    """按 run 写入文本:保留原字体/字号/颜色/粗斜体,超链接保留为可点击链接。"""
     for run in runs:
         if not run.text:
             continue
-        target = paragraph.add_run(run.text)
-        if run.bold:
-            target.bold = True
-        if run.italic:
-            target.italic = True
-        if run.mono:
-            target.font.name = DOCX_MONO_FONT
-        if run.size > 0:
-            target.font.size = Pt(run.size)
-        if run.color:
-            target.font.color.rgb = RGBColor(*run.color)
+        if run.link:
+            _docx_add_hyperlink(paragraph, run)
+        else:
+            _docx_apply_run_style(paragraph.add_run(run.text), run)
 
 
 def _docx_set_alignment(paragraph, align: str) -> None:
@@ -1068,7 +1360,140 @@ def _docx_add_inline_image(doc, block: Block, page: Page) -> None:
     _docx_add_picture(doc, block.image, width_inches)
 
 
-def _docx_write_block(doc, block: Block, page: Page) -> None:
+# pPr 中排在 numPr 之后的子元素:插入 numPr 时必须排在它们前面,否则 Word 会判为无效 XML
+_DOCX_PPR_AFTER_NUMPR = (
+    "w:suppressLineNumbers",
+    "w:pBdr",
+    "w:shd",
+    "w:tabs",
+    "w:suppressAutoHyphens",
+    "w:kinsoku",
+    "w:wordWrap",
+    "w:overflowPunct",
+    "w:topLinePunct",
+    "w:autoSpaceDE",
+    "w:autoSpaceDN",
+    "w:bidi",
+    "w:adjustRightInd",
+    "w:snapToGrid",
+    "w:spacing",
+    "w:ind",
+    "w:contextualSpacing",
+    "w:mirrorIndents",
+    "w:suppressOverlap",
+    "w:jc",
+    "w:textDirection",
+    "w:textAlignment",
+    "w:textboxTightWrap",
+    "w:outlineLvl",
+    "w:divId",
+    "w:cnfStyle",
+    "w:rPr",
+    "w:sectPr",
+    "w:pPrChange",
+)
+
+
+def _xml_int(element, attribute: str) -> int | None:
+    """读取 XML 属性里的整数;缺失或非数字返回 None(异常模板不应打断整篇转换)。"""
+    from docx.oxml.ns import qn
+
+    if element is None:
+        return None
+    value = element.get(qn(attribute))
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _docx_decimal_abstract_id(doc) -> int | None:
+    """找到「十进制编号」抽象定义号:优先取内置 List Number 样式挂载的实例。
+
+    内置样式全文共用一个编号实例,这正是多组有序列表编号连续累加的根因;
+    这里取它背后的 abstractNum 定义,再为每组列表派生独立实例。
+    """
+    from docx.oxml.ns import qn
+
+    part = getattr(doc.part, "numbering_part", None)
+    if part is None:
+        return None
+    numbering = part.element
+    nums = {num.get(qn("w:numId")): num for num in numbering.findall(qn("w:num"))}
+
+    wanted = None
+    try:
+        style_pPr = doc.styles["List Number"].element.find(qn("w:pPr"))
+        num_id_el = style_pPr.find(qn("w:numPr")).find(qn("w:numId"))
+        wanted = num_id_el.get(qn("w:val"))
+    except AttributeError:  # 模板样式缺失 numPr 时退回到「找第一个 decimal 定义」
+        wanted = None
+
+    candidates = [nums[wanted]] if wanted in nums else list(nums.values())
+    for num in candidates:
+        abstract_id = _xml_int(num.find(qn("w:abstractNumId")), "w:val")
+        if abstract_id is not None:
+            return abstract_id
+
+    for abstract in numbering.findall(qn("w:abstractNum")):
+        for lvl in abstract.findall(qn("w:lvl")):
+            fmt = lvl.find(qn("w:numFmt"))
+            if fmt is not None and fmt.get(qn("w:val")) == "decimal":
+                return _xml_int(abstract, "w:abstractNumId")
+    return None
+
+
+def _docx_new_list_numbering(doc, abstract_id: int, start: int = 1) -> int | None:
+    """为「一组有序列表」创建独立编号实例,并指定起始序号。
+
+    每组列表用新的 numId + startOverride,避免第二组接着第一组往下编号(3、4…),
+    同时跨页续写的列表可以通过 start 传原始序号继续(3、4 而不是重置成 1、2)。
+    """
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    part = getattr(doc.part, "numbering_part", None)
+    if part is None:
+        return None
+    numbering = part.element
+    used = [value for value in (_xml_int(num, "w:numId") for num in numbering.findall(qn("w:num"))) if value]
+    new_id = max(used + [0]) + 1
+
+    num = OxmlElement("w:num")
+    num.set(qn("w:numId"), str(new_id))
+    abstract_ref = OxmlElement("w:abstractNumId")
+    abstract_ref.set(qn("w:val"), str(abstract_id))
+    num.append(abstract_ref)
+    if start > 1:  # 起始序号为 1 时用默认值即可,不写冗余的 lvlOverride
+        override = OxmlElement("w:lvlOverride")
+        override.set(qn("w:ilvl"), "0")
+        start_override = OxmlElement("w:startOverride")
+        start_override.set(qn("w:val"), str(start))
+        override.append(start_override)
+        num.append(override)
+    numbering.append(num)
+    return new_id
+
+
+def _docx_apply_numbering(paragraph, num_id: int) -> None:
+    """把段落的编号实例改成指定 numId(覆盖样式里共用的那个)。"""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    pPr = paragraph._p.get_or_add_pPr()
+    for existing in pPr.findall(qn("w:numPr")):
+        pPr.remove(existing)
+    num_pr = OxmlElement("w:numPr")
+    level = OxmlElement("w:ilvl")
+    level.set(qn("w:val"), "0")
+    num_pr.append(level)
+    num_ref = OxmlElement("w:numId")
+    num_ref.set(qn("w:val"), str(num_id))
+    num_pr.append(num_ref)
+    pPr.insert_element_before(num_pr, *_DOCX_PPR_AFTER_NUMPR)
+
+
+def _docx_write_block(doc, block: Block, page: Page, num_id: int | None = None) -> None:
     from docx.shared import Pt
 
     if block.kind == "heading":
@@ -1084,6 +1509,8 @@ def _docx_write_block(doc, block: Block, page: Page) -> None:
         except KeyError:  # 模板缺少列表样式时降级为手写符号
             paragraph = doc.add_paragraph(("1. " if block.ordered else "- ") + block.text)
         else:
+            if block.ordered and num_id is not None:
+                _docx_apply_numbering(paragraph, num_id)
             if block.runs:
                 _docx_add_runs(paragraph, block.runs)
             if not paragraph.runs:
@@ -1118,14 +1545,23 @@ def to_docx(pages: list[Page], out_path: str) -> None:
     doc = Document()
     _docx_set_default_font(doc)
     _docx_set_page_size(doc, pages)
+    abstract_id = _docx_decimal_abstract_id(doc)
     for index, page in enumerate(pages):
         if index:  # 保留原始分页边界,但不写入任何可见标题
             doc.add_page_break()
         if page.png:  # 扫描件:整页图片兜底,跳过零散图片块避免重复贴图
             _docx_add_picture(doc, page.png, DOCX_TEXT_WIDTH_INCHES)
             continue
+        # 每组连续的有序列表用独立编号实例,避免第二组接着第一组编号(3、4…)
+        group_num_id: int | None = None
         for block in page.blocks:
-            _docx_write_block(doc, block, page)
+            if block.kind == "list" and block.ordered:
+                if group_num_id is None and abstract_id is not None:
+                    group_num_id = _docx_new_list_numbering(doc, abstract_id, block.start or 1)
+                _docx_write_block(doc, block, page, group_num_id)
+            else:
+                group_num_id = None
+                _docx_write_block(doc, block, page)
         if not page.blocks and page.text.strip():  # 未提取结构时的纯文本兜底
             for line in page.text.splitlines():
                 if line.strip():
@@ -1252,16 +1688,20 @@ def to_xlsx(pages: list[Page], out_path: str) -> None:
 
 
 def _pptx_texts(blocks: list[Block]) -> tuple[str, list[str]]:
-    """语义块 -> (标题, 要点列表);标题取第一个标题块,要点不截断(由调用方分页)。"""
+    """语义块 -> (标题, 要点列表);标题取第一个标题块,要点不截断(由调用方分页)。
+
+    列表要点沿用原文的项目符号/序号:有序列表不能统一写成 "•",否则步骤顺序丢失。
+    """
     title = ""
+    prefixes = _list_prefixes(blocks)
     items: list[str] = []
-    for block in blocks:
+    for index, block in enumerate(blocks):
         if block.kind not in ("heading", "paragraph", "list"):
             continue
         if block.kind == "heading" and not title:
             title = block.text
             continue
-        items.append(("• " if block.kind == "list" else "") + block.text)
+        items.append(prefixes.get(index, "") + block.text)
     return title, items
 
 
@@ -1708,6 +2148,7 @@ def _build_parser() -> _Parser:
     parser.add_argument("out", nargs="?", default=None, help="输出文件路径(--format/--page 时必填)")
     parser.add_argument("--format", default=None, help="word|excel|ppt|image|txt|md")
     parser.add_argument("--layout", action="store_true", help="Word/PPT 保留原版式(绝对定位文字层)")
+    parser.add_argument("--pages", default=None, help='仅转换指定页,如 "1-3,5"(留空为全部页)')
     parser.add_argument("--page", type=int, default=None, help="仅渲染第 N 页为 PNG")
     parser.add_argument("--check", action="store_true", help="仅统计页数")
     return parser
@@ -1730,21 +2171,34 @@ def main(argv=None) -> int:
                 raise PdfError(f"未知格式: {args.format}")
             if not args.out:
                 raise PdfError("缺少输出文件参数")
+            total = count_pages(args.in_pdf)
+            numbers = _resolve_page_numbers(args.pages, total)
             if args.layout:
                 if args.format not in ("word", "ppt"):
                     raise PdfError("--layout 仅支持 word / ppt")
                 writer = to_docx_preserve if args.format == "word" else to_pptx_preserve
-                writer(args.in_pdf, args.out)
-                _print_json({"ok": True, "numPages": count_pages(args.in_pdf)})
+                if len(numbers) < total:
+                    # 保留原版式按整份文件写出,选页时先复制出子集 PDF 再交给既有实现
+                    subset_pdf = f"{args.out}.pages.pdf"
+                    try:
+                        _copy_pages(args.in_pdf, subset_pdf, numbers)
+                        writer(subset_pdf, args.out)
+                    finally:
+                        if os.path.exists(subset_pdf):
+                            os.remove(subset_pdf)
+                else:
+                    writer(args.in_pdf, args.out)
+                _print_json({"ok": True, "numPages": len(numbers)})
                 return 0
             spec = _FORMAT_SPECS[args.format]
             if spec.writer is None:
-                num_pages = _write_markdown(args.in_pdf, args.out)
+                num_pages = _write_markdown(args.in_pdf, args.out, page_numbers=numbers)
             else:
                 pages = extract_pages(
                     args.in_pdf,
                     render_images=spec.image_mode,
                     keep_blocks=spec.needs_blocks,
+                    page_numbers=numbers,
                 )
                 spec.writer(pages, args.out)
                 num_pages = len(pages)
@@ -1752,6 +2206,8 @@ def main(argv=None) -> int:
             return 0
 
         if args.page is not None:
+            if args.pages:
+                raise PdfError("--pages 不能与 --page 同时使用")
             if not args.out:
                 raise PdfError("缺少输出文件参数")
             render_page(args.in_pdf, args.page, args.out)

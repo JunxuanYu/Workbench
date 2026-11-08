@@ -8,10 +8,12 @@
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 import zipfile
@@ -102,6 +104,24 @@ def make_page_number_fixture(path):
     doc.close()
 
 
+def make_hyperlink_fixture(path):
+    """带 URI 超链接的文档页:链接矩形覆盖整行文字。"""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 150), "访问 WorkLift 主页了解详情", fontsize=12, fontname="china-s")
+    page.insert_text((72, 210), "没有链接的正文段落,补充足够的文字便于稳定统计", fontsize=12, fontname="china-s")
+    spans = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            spans.extend(span for span in line.get("spans", []) if span.get("text", "").strip())
+    rect = fitz.Rect(spans[0]["bbox"])
+    page.insert_link({"kind": fitz.LINK_URI, "from": rect, "uri": "https://worklift.example.com/"})
+    doc.save(path)
+    doc.close()
+
+
 def make_layout_fixture(path):
     """典型文档版式:居中标题、小节标题、折行正文、跨块列表续行。
 
@@ -131,6 +151,91 @@ def make_cross_page_heading_fixture(path):
     page2 = doc.new_page(width=595, height=842)
     page2.insert_text((72, 150), "二、后续计划", fontsize=16, fontname="china-s")
     page2.insert_text((72, 190), "第二页正文", fontsize=12, fontname="china-s")
+    doc.save(path)
+    doc.close()
+
+
+def make_multi_ordered_list_fixture(path):
+    """同页两组有序列表(中间隔一个小节标题),每组都从 1 开始。"""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 90), "第一组", fontsize=18, fontname="china-s")
+    page.insert_text((72, 130), "1. 甲项", fontsize=12, fontname="china-s")
+    page.insert_text((72, 153), "2. 乙项", fontsize=12, fontname="china-s")
+    page.insert_text((72, 200), "第二组", fontsize=18, fontname="china-s")
+    page.insert_text((72, 240), "1. 丙项", fontsize=12, fontname="china-s")
+    page.insert_text((72, 263), "2. 丁项", fontsize=12, fontname="china-s")
+    doc.save(path)
+    doc.close()
+
+
+def make_cross_page_list_fixture(path):
+    """有序列表跨页续写:第 1 页 1、2,第 2 页 3、4。"""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 90), "执行清单", fontsize=18, fontname="china-s")
+    page.insert_text((72, 130), "1. 第一步", fontsize=12, fontname="china-s")
+    page.insert_text((72, 153), "2. 第二步", fontsize=12, fontname="china-s")
+    page2 = doc.new_page(width=595, height=842)
+    page2.insert_text((72, 130), "3. 第三步", fontsize=12, fontname="china-s")
+    page2.insert_text((72, 153), "4. 第四步", fontsize=12, fontname="china-s")
+    doc.save(path)
+    doc.close()
+
+
+def paragraph_numbering(path):
+    """读取 docx:文本 -> (numId, 起始序号);numId 为 None 表示未覆盖样式编号。"""
+    from docx.oxml.ns import qn
+
+    doc = Document(path)
+    numbering = doc.part.numbering_part.element
+    starts = {}
+    for num in numbering.findall(qn("w:num")):
+        num_id = num.get(qn("w:numId"))
+        override = num.find(qn("w:lvlOverride"))
+        start = 1
+        if override is not None:
+            start_el = override.find(qn("w:startOverride"))
+            if start_el is not None:
+                start = int(start_el.get(qn("w:val")))
+        starts[num_id] = start
+
+    result = {}
+    for paragraph in doc.paragraphs:
+        if not paragraph.text.strip():
+            continue
+        pPr = paragraph._p.pPr
+        num_pr = pPr.find(qn("w:numPr")) if pPr is not None else None
+        if num_pr is None:
+            result[paragraph.text] = (None, None)
+            continue
+        num_id = num_pr.find(qn("w:numId")).get(qn("w:val"))
+        result[paragraph.text] = (num_id, starts.get(num_id))
+    return result
+
+
+def make_margined_short_page_fixture(path):
+    """页眉页脚 9pt、正文 12pt,且第 2 页正文极短。
+
+    复现缺陷:按单页统计字号时,第 2 页的 9pt 页眉页脚字符数不少于正文,
+    正文基准字号被压到 9pt,12pt 正文因此被判成「比正文大 15%」的标题。
+    """
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 30), "内部资料 请勿外传", fontsize=9, fontname="china-s")
+    page.insert_text((280, 815), "- 1 -", fontsize=9, fontname="china-s")
+    page.insert_text((72, 90), "季度报告", fontsize=22, fontname="china-s")
+    page.insert_text((72, 130), "一、总体情况", fontsize=15, fontname="china-s")
+    page.insert_text((72, 165), "本季度营收同比增长百分之十八,成本控制良好,回款周期缩短。", fontsize=12, fontname="china-s")
+    page.insert_text((72, 190), "团队交付质量稳定,客户满意度较上季度有明显提升。", fontsize=12, fontname="china-s")
+    page.insert_text((72, 215), "重点项目的风险已在月初完成识别并制定应对方案。", fontsize=12, fontname="china-s")
+
+    page2 = doc.new_page(width=595, height=842)
+    page2.insert_text((72, 30), "内部资料 请勿外传", fontsize=9, fontname="china-s")
+    page2.insert_text((280, 815), "- 2 -", fontsize=9, fontname="china-s")
+    page2.insert_text((72, 90), "二、下步计划", fontsize=15, fontname="china-s")
+    page2.insert_text((72, 130), "1. 拓展市场", fontsize=12, fontname="china-s")
+    page2.insert_text((72, 153), "2. 优化流程", fontsize=12, fontname="china-s")
     doc.save(path)
     doc.close()
 
@@ -205,8 +310,8 @@ class PdfConvertTest(unittest.TestCase):
         return {"type": 0, "bbox": bbox, "lines": [{"spans": spans}]}
 
     @staticmethod
-    def _span(size, text, flags=0, bbox=(0, 0, 60, 20)):
-        return {"size": float(size), "font": "x", "flags": flags, "text": text, "bbox": bbox}
+    def _span(size, text, flags=0, bbox=(0, 0, 60, 20), font="x"):
+        return {"size": float(size), "font": font, "flags": flags, "text": text, "bbox": bbox}
 
     def test_markdown_inline_styles_and_link(self):
         blocks = [
@@ -250,7 +355,21 @@ class PdfConvertTest(unittest.TestCase):
     def test_markdown_image_fn_unused_gives_placeholder(self):
         blocks = [{"type": 1, "bbox": (0, 0, 100, 80), "width": 10, "height": 8}]
         md = pdf_convert.markdown_from_blocks(blocks)
-        self.assertIn("![图片](data:,)", md)
+        self.assertIn(pdf_convert.MD_IMAGE_FALLBACK_TEXT, md)
+
+    def test_markdown_failed_image_has_no_broken_media_uri(self):
+        blocks = [{"type": 1, "bbox": (0, 0, 100, 80), "width": 10, "height": 8}]
+        md = pdf_convert.markdown_from_blocks(blocks)
+        self.assertNotIn("data:,", md, "不应输出 ![图片](data:,) 这类坏图片占位")
+
+    def test_markdown_bold_span_with_spaces_is_valid_commonmark(self):
+        # 带/不含首尾空格的粗体 span:强调标记只应包住文本本身
+        blocks = [self._block([self._span(12.0, "  加粗文本  ", flags=16)])]
+        md = pdf_convert.markdown_from_blocks(blocks)
+        self.assertIn("**加粗文本**", md)
+        self.assertNotIn("** 加粗文本 **", md)
+        self.assertNotIn("**加粗文本 **", md)
+        self.assertNotIn("** 加粗文本**", md)
 
     # ---------- 文本拼接 / 跨块合并 / 标题层级 ----------
 
@@ -400,6 +519,181 @@ class PdfConvertTest(unittest.TestCase):
         bold = [r.text for p in doc.paragraphs for r in p.runs if r.bold]
         self.assertIn("加粗", bold)
         self.assertNotIn("普通", bold)
+
+    def test_docx_run_keeps_original_font_name(self):
+        # 原 PDF 声明的字体名(含子集前缀)应原样写回 run,不再全部回退默认字体
+        out = self.out("font.docx")
+        pages = [
+            pdf_convert.Page(
+                num=1,
+                text="字体",
+                blocks=[
+                    pdf_convert.Block(
+                        "paragraph",
+                        text="字体",
+                        runs=[
+                            pdf_convert.Run("代码", font="ABCDEE+SourceCodePro"),
+                            pdf_convert.Run("正文"),
+                        ],
+                    )
+                ],
+            )
+        ]
+        pdf_convert.to_docx(pages, out)
+        doc = Document(out)
+        names = {r.text: r.font.name for p in doc.paragraphs for r in p.runs}
+        self.assertEqual(names.get("代码"), "SourceCodePro")
+        self.assertIsNone(names.get("正文"), "未声明字体的 run 交给 Normal 样式")
+
+    def test_docx_hyperlink_run_is_clickable(self):
+        # 带链接的 Run 应写成 w:hyperlink(可点击),并保留原文字
+        from docx.oxml.ns import qn
+
+        out = self.out("link.docx")
+        pages = [
+            pdf_convert.Page(
+                num=1,
+                text="链接",
+                blocks=[
+                    pdf_convert.Block(
+                        "paragraph",
+                        text="链接",
+                        runs=[
+                            pdf_convert.Run("WorkLift", link="https://worklift.example.com/"),
+                            pdf_convert.Run(" 与 ", size=12),
+                            pdf_convert.Run(
+                                "文档", bold=True, link="https://docs.worklift.example.com/"
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ]
+        pdf_convert.to_docx(pages, out)
+        doc = Document(out)
+        links = doc.element.body.findall(".//" + qn("w:hyperlink"))
+        self.assertEqual(len(links), 2, "两个带链接的 run 应各自产出一个 hyperlink")
+        targets = {doc.part.rels.get(h.get(qn("r:id"))).target_ref for h in links}
+        self.assertEqual(
+            targets, {"https://worklift.example.com/", "https://docs.worklift.example.com/"}
+        )
+        texts = {h.find(".//" + qn("w:t")).text for h in links}
+        self.assertEqual(texts, {"WorkLift", "文档"})
+
+    def test_docx_hyperlink_glyph_and_text_fallback(self):
+        # 无链接 run 不应误包超链接;链接写入失败时退回普通文字(异常分支)
+        from docx.oxml.ns import qn
+
+        out = self.out("link-fallback.docx")
+        pages = [
+            pdf_convert.Page(
+                num=1,
+                text="降级",
+                blocks=[
+                    pdf_convert.Block(
+                        "paragraph",
+                        text="降级",
+                        runs=[pdf_convert.Run("纯文字", size=12)],
+                    )
+                ],
+            )
+        ]
+        pdf_convert.to_docx(pages, out)
+        doc = Document(out)
+        self.assertFalse(doc.element.body.findall(".//" + qn("w:hyperlink")))
+
+        with unittest.mock.patch(
+            "docx.opc.part.Part.relate_to",  # 文档部件注册关系入口:强制走异常分支
+            side_effect=OSError("关系注册失败"),
+        ):
+            fallback = self.out("link-error.docx")
+            pdf_convert.to_docx(
+                [
+                    pdf_convert.Page(
+                        num=1,
+                        text="降级",
+                        blocks=[
+                            pdf_convert.Block(
+                                "paragraph",
+                                text="降级",
+                                runs=[pdf_convert.Run("纯文字", link="https://broken.example.com")],
+                            )
+                        ],
+                    )
+                ],
+                fallback,
+            )
+        err_doc = Document(fallback)
+        self.assertIn("纯文字", err_doc.paragraphs[0].text, "异常分支应保留文字本身")
+
+    def test_cli_word_converts_link_to_clickable_hyperlink(self):
+        src = self.out("link.pdf")
+        make_hyperlink_fixture(src)
+        out = self.out("link-cli.docx")
+        r = run_cli([src, out, "--format", "word"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        from docx.oxml.ns import qn
+
+        doc = Document(out)
+        links = doc.element.body.findall(".//" + qn("w:hyperlink"))
+        self.assertEqual(len(links), 1)
+        rid = links[0].get(qn("r:id"))
+        self.assertEqual(doc.part.rels.get(rid).target_ref, "https://worklift.example.com/")
+        inner = links[0].find(".//" + qn("w:t")).text or ""
+        self.assertIn("WorkLift", inner)
+
+    def test_docx_unsafe_link_scheme_falls_back_to_plain_text(self):
+        # javascript: 协议不允许进入转换结果,一律退回普通文字
+        from docx.oxml.ns import qn
+
+        out = self.out("unsafe-link.docx")
+        pages = [
+            pdf_convert.Page(
+                num=1,
+                text="危险",
+                blocks=[
+                    pdf_convert.Block(
+                        "paragraph",
+                        text="危险",
+                        runs=[
+                            pdf_convert.Run("脚本", link="javascript:alert(1)"),
+                            pdf_convert.Run("邮件", link="mailto:a@b.example.com"),
+                        ],
+                    )
+                ],
+            )
+        ]
+        pdf_convert.to_docx(pages, out)
+        doc = Document(out)
+        links = doc.element.body.findall(".//" + qn("w:hyperlink"))
+        self.assertEqual(len(links), 1, "只有白名单内的 mailto 应产出超链接")
+        self.assertIn("mailto:a@b.example.com", doc.part.rels.get(links[0].get(qn("r:id"))).target_ref)
+        plain = [r.text for p in doc.paragraphs for r in p.runs]
+        self.assertIn("脚本", plain, "白名单外的链接文字退回普通 run")
+
+    def test_markdown_drops_unsafe_link_scheme(self):
+        blocks = [self._block([self._span(12.0, "危险链接", bbox=(0, 0, 60, 16))])]
+        links = [{"kind": 2, "from": (0, -2, 60, 18), "uri": "javascript:alert(1)"}]
+        md = pdf_convert.markdown_from_blocks(blocks, links=links)
+        self.assertIn("危险链接", md, "文字本身必须保留")
+        self.assertNotIn("javascript", md)
+        self.assertNotIn("](", md)
+
+    def test_markdown_link_parens_do_not_break_syntax(self):
+        blocks = [self._block([self._span(12.0, "括号链接", bbox=(0, 0, 60, 16))])]
+        links = [{"kind": 2, "from": (0, -2, 60, 18), "uri": "https://example.com/page(1)"}]
+        md = pdf_convert.markdown_from_blocks(blocks, links=links)
+        self.assertIn("[括号链接](https://example.com/page%281%29)", md)
+
+    def test_span_runs_captures_font_name(self):
+        spans = [self._span(12.0, "正文", font="ABCDEE+SourceCodePro")]
+        runs = pdf_convert._span_runs(spans, [])
+        self.assertEqual(runs[0].font, "ABCDEE+SourceCodePro")
+
+    def test_span_runs_font_missing_is_none(self):
+        span = {"size": 12.0, "flags": 0, "text": "无字体", "bbox": (0, 0, 40, 16)}
+        runs = pdf_convert._span_runs([span], [])
+        self.assertIsNone(runs[0].font)
 
     def test_docx_table_becomes_real_table(self):
         src = self.out("table.pdf")
@@ -854,6 +1148,510 @@ class RenderBudgetTest(unittest.TestCase):
                 self.assertGreater(pix.width * pix.height, 500_000, "应尽量用满预算而非过度降采样")
             finally:
                 pix = None
+
+
+class PageRangeTest(unittest.TestCase):
+    """按页码转换：范围解析 + 各格式选页输出 + CLI 参数校验。
+
+    页码选择属于"减少输出范围"的功能，关键是既不能多转页（用户拿到多余内容），
+    也不能改变页号语义（TXT/Markdown 的页码标题、图片文件名仍用原始页号）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="worklift-pages-test-")
+        cls.pdf = os.path.join(cls.tmp, "sample.pdf")
+        make_fixture(cls.pdf, pages=3)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def out(self, name):
+        return os.path.join(self.tmp, name)
+
+    # ---------- 纯函数：范围解析 ----------
+
+    def test_parse_empty_means_all(self):
+        self.assertEqual(pdf_convert.parse_page_range(None, 3), [1, 2, 3])
+        self.assertEqual(pdf_convert.parse_page_range("", 3), [1, 2, 3])
+        self.assertEqual(pdf_convert.parse_page_range("   ", 3), [1, 2, 3])
+
+    def test_parse_single_and_range(self):
+        self.assertEqual(pdf_convert.parse_page_range("2", 5), [2])
+        self.assertEqual(pdf_convert.parse_page_range("2-4", 5), [2, 3, 4])
+        self.assertEqual(pdf_convert.parse_page_range("1-1", 5), [1])
+        self.assertEqual(pdf_convert.parse_page_range("1-5", 5), [1, 2, 3, 4, 5])
+
+    def test_parse_open_ended_range(self):
+        self.assertEqual(pdf_convert.parse_page_range("3-", 5), [3, 4, 5])
+        self.assertEqual(pdf_convert.parse_page_range("-2", 5), [1, 2])
+
+    def test_parse_combo_sorts_and_dedupes(self):
+        self.assertEqual(pdf_convert.parse_page_range("3,1,2,2", 5), [1, 2, 3])
+        self.assertEqual(pdf_convert.parse_page_range("5,1-2,2-3", 5), [1, 2, 3, 5])
+
+    def test_parse_fullwidth_and_spaces_tolerated(self):
+        # 中文输入法常见的全角逗号/连字符/波浪线，以及多余空格
+        self.assertEqual(pdf_convert.parse_page_range("1－2，4", 5), [1, 2, 4])
+        self.assertEqual(pdf_convert.parse_page_range(" 1 ~ 2 , 4 ", 5), [1, 2, 4])
+        self.assertEqual(pdf_convert.parse_page_range("1、3", 5), [1, 3])
+
+    def test_parse_rejects_out_of_range_and_reversed(self):
+        with self.assertRaises(pdf_convert.PdfError) as ctx:
+            pdf_convert.parse_page_range("9", 3)
+        self.assertIn("超出范围", str(ctx.exception))
+        self.assertIn("共 3 页", str(ctx.exception))
+
+        with self.assertRaises(pdf_convert.PdfError) as ctx:
+            pdf_convert.parse_page_range("3-9", 3)
+        self.assertIn("超出范围", str(ctx.exception))
+
+    def test_parse_rejects_zero_and_negative_and_garbage(self):
+        for spec in ("0", "-0", "abc", "1-a", "1-2-3"):
+            with self.assertRaises(pdf_convert.PdfError, msg=f"{spec} 应报错"):
+                pdf_convert.parse_page_range(spec, 3)
+
+    def test_parse_rejects_start_greater_than_end(self):
+        with self.assertRaises(pdf_convert.PdfError) as ctx:
+            pdf_convert.parse_page_range("3-1", 5)
+        self.assertIn("起始页不能大于结束页", str(ctx.exception))
+
+    def test_parse_requires_known_total(self):
+        with self.assertRaises(pdf_convert.PdfError):
+            pdf_convert.parse_page_range("1", 0)
+
+    # ---------- 提取层：选页不影响原始页号 ----------
+
+    def test_extract_pages_subset_keeps_original_numbers(self):
+        pages = pdf_convert.extract_pages(self.pdf, render_images=False, page_numbers="2-3")
+        self.assertEqual([p.num for p in pages], [2, 3])
+        self.assertIn("第 2 页 测试文档", pages[0].text)
+        self.assertIn("第 3 页 测试文档", pages[1].text)
+
+    def test_extract_pages_accepts_list_and_returns_single_page(self):
+        pages = pdf_convert.extract_pages(self.pdf, render_images=False, page_numbers=[2])
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0].num, 2)
+        self.assertNotIn("第 1 页", pages[0].text)
+
+    def test_extract_pages_rejects_bad_range(self):
+        with self.assertRaises(pdf_convert.PdfError):
+            pdf_convert.extract_pages(self.pdf, page_numbers="9")
+
+    # ---------- CLI：各格式只产出选中页 ----------
+
+    def test_cli_txt_only_selected_page(self):
+        out = self.out("pages-txt.txt")
+        r = run_cli([self.pdf, out, "--format", "txt", "--pages", "2"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["numPages"], 1)
+        with open(out, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("第 2 页 测试文档", text)
+        self.assertNotIn("第 1 页 测试文档", text)
+        self.assertNotIn("第 3 页 测试文档", text)
+
+    def test_cli_images_zip_only_selected_pages(self):
+        out = self.out("pages-images.zip")
+        r = run_cli([self.pdf, out, "--format", "image", "--pages", "2-3"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with zipfile.ZipFile(out) as zf:
+            names = sorted(zf.namelist())
+        self.assertEqual(names, ["page_2.png", "page_3.png"])
+
+    def test_cli_markdown_only_selected_page(self):
+        out = self.out("pages-md.md")
+        r = run_cli([self.pdf, out, "--format", "md", "--pages", "3"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(out, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("--- 第 3 页 ---", text)
+        self.assertNotIn("--- 第 1 页 ---", text)
+
+    def test_cli_word_only_selected_page(self):
+        out = self.out("pages-word.docx")
+        r = run_cli([self.pdf, out, "--format", "word", "--pages", "1"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = Document(out)
+        text = "\n".join(p.text for p in doc.paragraphs)
+        self.assertIn("第 1 页", text)
+        self.assertNotIn("第 2 页", text)
+
+    def test_cli_layout_word_respects_pages(self):
+        """保留原版式按整份 PDF 写出，选页时必须先裁出子集（回归：曾整份输出）。"""
+        from docx.oxml.ns import qn
+
+        out = self.out("pages-layout.docx")
+        r = run_cli([self.pdf, out, "--format", "word", "--layout", "--pages", "2"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["numPages"], 1)
+        doc = Document(out)
+        # 保真模式下文字在文本框层，需从 XML 里取；正文段落是空的
+        text = "".join(node.text or "" for node in doc.element.body.iter(qn("w:t")))
+        self.assertIn("第 2 页", text)
+        self.assertNotIn("第 1 页", text)
+        self.assertFalse(os.path.exists(out + ".pages.pdf"), "选页用的临时 PDF 应被清理")
+
+    def test_cli_all_pages_when_pages_omitted(self):
+        out = self.out("pages-all.txt")
+        r = run_cli([self.pdf, out, "--format", "txt"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["numPages"], 3)
+
+    def test_cli_rejects_bad_pages(self):
+        cases = {"9": "超出范围", "0": "超出范围", "3-1": "起始页不能大于结束页", "abc": "格式不正确"}
+        for spec, expected in cases.items():
+            with self.subTest(spec=spec):
+                out = self.out(f"bad-{abs(hash(spec))}.txt")
+                r = run_cli([self.pdf, out, "--format", "txt", "--pages", spec])
+                self.assertEqual(r.returncode, 1)
+                self.assertIn(expected, r.stderr)
+                self.assertFalse(os.path.exists(out), "参数非法时不应产出文件")
+
+    def test_cli_pages_conflicts_with_single_page_render(self):
+        out = self.out("conflict.png")
+        r = run_cli([self.pdf, out, "--page", "1", "--pages", "1-2"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--pages", r.stderr)
+
+
+class BodySizeTest(unittest.TestCase):
+    """正文基准字号必须跨整份文档统计,且排除页眉/页脚。
+
+    历史缺陷:按单页统计时,页眉页脚 9pt 小字会压低基准字号,12pt 正文被判成标题,
+    进而在 Word 里变成 Heading 3、Markdown 里变成 ###、PPT 里进标题区——格式整体乱套。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.pdf = os.path.join(self.tmp, "margined.pdf")
+        make_margined_short_page_fixture(self.pdf)
+
+    def out(self, name):
+        return os.path.join(self.tmp, name)
+
+    def test_document_body_size_not_biased_by_margins(self):
+        doc = fitz.open(self.pdf)
+        self.addCleanup(doc.close)
+        self.assertAlmostEqual(pdf_convert._document_body_size(doc), 12.0, places=1)
+
+    def test_margin_lines_are_excluded_from_body_size(self):
+        """页眉行(顶部 7% 内)与页脚行不应计入正文字号统计。"""
+        self.assertTrue(pdf_convert._segment_in_margin((72, 20, 200, 32), 842))
+        self.assertTrue(pdf_convert._segment_in_margin((280, 806, 320, 818), 842))
+        self.assertFalse(pdf_convert._segment_in_margin((72, 130, 300, 142), 842))
+        self.assertFalse(pdf_convert._segment_in_margin(None, 842))
+
+    def test_short_page_body_text_stays_paragraph(self):
+        pages = pdf_convert.extract_pages(self.pdf, render_images="none", keep_blocks=True)
+        second = pages[1]
+        headings = [b for b in second.blocks if b.kind == "heading"]
+        self.assertEqual([b.text for b in headings], ["二、下步计划"])
+        lists = [b for b in second.blocks if b.kind == "list"]
+        self.assertEqual([b.text for b in lists], ["拓展市场", "优化流程"])
+        self.assertTrue(all(b.ordered for b in lists), "1./2. 应识别为有序列表")
+
+    def test_heading_levels_follow_size_not_margin_noise(self):
+        pages = pdf_convert.extract_pages(self.pdf, render_images="none", keep_blocks=True)
+        levels = {(b.text, b.level) for b in pages[0].blocks if b.kind == "heading"}
+        self.assertEqual(levels, {("季度报告", 1), ("一、总体情况", 2)})
+
+    def test_markdown_body_not_promoted_to_heading(self):
+        md_path = self.out("m.md")
+        pdf_convert._write_markdown(self.pdf, md_path)
+        with open(md_path, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertNotIn("### ", text, "12pt 正文不应变成三级标题")
+        body_lines = [line for line in text.splitlines() if "拓展市场" in line]
+        self.assertTrue(body_lines)
+        self.assertFalse(body_lines[0].lstrip().startswith("#"), "正文列表项不应带标题标记")
+
+    def test_body_size_sampling_is_bounded(self):
+        """大文档只采样前 BODY_SIZE_SAMPLE_PAGES 页,避免整份重解析把耗时翻倍。"""
+        pdf = os.path.join(self.tmp, "many.pdf")
+        doc = fitz.open()
+        for index in range(pdf_convert.BODY_SIZE_SAMPLE_PAGES + 5):
+            page = doc.new_page(width=595, height=842)
+            page.insert_text((72, 200), f"正文第{index}页 内容内容内容", fontsize=12, fontname="china-s")
+        doc.save(pdf)
+        doc.close()
+        doc = fitz.open(pdf)
+        self.addCleanup(doc.close)
+        self.assertEqual(len(list(pdf_convert._body_size_pages(doc))), pdf_convert.BODY_SIZE_SAMPLE_PAGES)
+        self.assertAlmostEqual(pdf_convert._document_body_size(doc), 12.0, places=1)
+
+    def test_docx_body_not_styled_as_heading(self):
+        pages = pdf_convert.extract_pages(self.pdf, render_images="none", keep_blocks=True)
+        docx_path = self.out("m.docx")
+        pdf_convert.to_docx(pages, docx_path)
+        doc = Document(docx_path)
+        styled = {p.text: p.style.name for p in doc.paragraphs if p.text}
+        self.assertEqual(styled.get("拓展市场"), "List Number")
+        self.assertEqual(styled.get("优化流程"), "List Number")
+        self.assertEqual(styled.get("二、下步计划"), "Heading 2")
+        self.assertNotEqual(styled.get("拓展市场"), "Heading 3")
+
+
+class DocxListNumberingTest(unittest.TestCase):
+    """Word 里有序列表必须「每组从 1 开始」,跨页续写则接续原序号。
+
+    历史缺陷:内置 List Number 样式全文共用一个编号实例(numId=5),
+    第二组列表接着上一组编号,输出成 3、4 而不是 1、2。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def out(self, name):
+        return os.path.join(self.tmp, name)
+
+    def convert(self, make, name="x.docx"):
+        pdf = self.out(name.replace(".docx", ".pdf"))
+        make(pdf)
+        pages = pdf_convert.extract_pages(pdf, render_images="none", keep_blocks=True)
+        docx_path = self.out(name)
+        pdf_convert.to_docx(pages, docx_path)
+        return docx_path
+
+    def test_two_groups_get_separate_numbering_instances(self):
+        docx_path = self.convert(make_multi_ordered_list_fixture)
+        numbers = paragraph_numbering(docx_path)
+        first = {numbers["甲项"], numbers["乙项"]}
+        second = {numbers["丙项"], numbers["丁项"]}
+        self.assertEqual(len(first), 1, "同一组内应共用一个编号实例")
+        self.assertEqual(len(second), 1, "同一组内应共用一个编号实例")
+        self.assertNotEqual(first, second, "两组有序列表必须使用不同编号实例,才能各自从 1 开始")
+        self.assertEqual(numbers["甲项"][1], 1)
+        self.assertEqual(numbers["丙项"][1], 1)
+
+    def test_cross_page_list_continues_from_original_number(self):
+        docx_path = self.convert(make_cross_page_list_fixture)
+        numbers = paragraph_numbering(docx_path)
+        self.assertEqual(numbers["第一步"][1], 1)
+        self.assertEqual(numbers["第三步"][1], 3, "跨页续写的列表应从原文档的 3 继续,而不是重置为 1")
+        self.assertNotEqual(numbers["第一步"][0], numbers["第三步"][0])
+
+    def test_bullet_list_keeps_style_numbering(self):
+        pdf = self.out("b.pdf")
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 90), "要点", fontsize=18, fontname="china-s")
+        page.insert_text((72, 130), "• 无序项一", fontsize=12, fontname="china-s")
+        page.insert_text((72, 153), "• 无序项二", fontsize=12, fontname="china-s")
+        doc.save(pdf)
+        doc.close()
+        pages = pdf_convert.extract_pages(pdf, render_images="none", keep_blocks=True)
+        docx_path = self.out("b.docx")
+        pdf_convert.to_docx(pages, docx_path)
+        numbers = paragraph_numbering(docx_path)
+        self.assertEqual(numbers["无序项一"], (None, None), "无序列表不应改用有序编号实例")
+        styles = {p.text: p.style.name for p in Document(docx_path).paragraphs if p.text}
+        self.assertEqual(styles["无序项一"], "List Bullet")
+
+    def test_list_marker_number_parsing(self):
+        cases = {
+            "1. 甲": 1,
+            "12) 乙": 12,
+            "一、丙": 1,
+            "十、丁": 10,
+            "十一、戊": 11,
+            "无编号": 0,
+            "1.2 版本说明": 0,  # 小数不是编号
+        }
+        for text, expected in cases.items():
+            self.assertEqual(pdf_convert._list_marker_number(text), expected, text)
+
+
+class MarkdownListTest(unittest.TestCase):
+    """Markdown 列表:条目之间不插空行(否则渲染成 loose list,间距变大),有序列表保留真实序号。"""
+
+    def render(self, blocks):
+        return pdf_convert._render_markdown_blocks(blocks)
+
+    def test_consecutive_items_share_one_line_break(self):
+        blocks = [
+            pdf_convert.Block("list", text="甲"),
+            pdf_convert.Block("list", text="乙"),
+            pdf_convert.Block("list", text="丙"),
+        ]
+        self.assertEqual(self.render(blocks), "- 甲\n- 乙\n- 丙")
+
+    def test_ordered_list_uses_real_numbers(self):
+        blocks = [
+            pdf_convert.Block("list", text="甲", ordered=True, start=1),
+            pdf_convert.Block("list", text="乙", ordered=True, start=2),
+            pdf_convert.Block("list", text="丙", ordered=True, start=3),
+        ]
+        self.assertEqual(self.render(blocks), "1. 甲\n2. 乙\n3. 丙")
+
+    def test_ordered_list_falls_back_to_increment_without_marker(self):
+        blocks = [
+            pdf_convert.Block("list", text="甲", ordered=True, start=0),
+            pdf_convert.Block("list", text="乙", ordered=True, start=0),
+        ]
+        self.assertEqual(self.render(blocks), "1. 甲\n2. 乙")
+
+    def test_new_group_restarts_numbering(self):
+        blocks = [
+            pdf_convert.Block("list", text="甲", ordered=True, start=1),
+            pdf_convert.Block("list", text="乙", ordered=True, start=2),
+            pdf_convert.Block("heading", text="第二节", level=2),
+            pdf_convert.Block("list", text="丙", ordered=True, start=1),
+            pdf_convert.Block("list", text="丁", ordered=True, start=2),
+        ]
+        text = self.render(blocks)
+        self.assertIn("1. 甲\n2. 乙", text)
+        self.assertIn("1. 丙\n2. 丁", text)
+        self.assertNotIn("3. 丙", text, "第二组不应接着第一组编号")
+
+    def test_block_types_keep_blank_line_between(self):
+        blocks = [
+            pdf_convert.Block("list", text="甲"),
+            pdf_convert.Block("paragraph", text="列表之后的正文"),
+            pdf_convert.Block("list", text="乙", ordered=True, start=1),
+        ]
+        text = self.render(blocks)
+        self.assertIn("- 甲\n\n列表之后的正文", text)
+        self.assertIn("列表之后的正文\n\n1. 乙", text, "无序与有序列表之间必须留空行,否则会被当成同一个列表")
+
+    def test_markdown_document_keeps_original_numbers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = os.path.join(tmp, "l.pdf")
+            make_multi_ordered_list_fixture(pdf)
+            md_path = os.path.join(tmp, "l.md")
+            pdf_convert._write_markdown(pdf, md_path)
+            with open(md_path, encoding="utf-8") as handle:
+                text = handle.read()
+        self.assertIn("1. 甲项\n2. 乙项", text)
+        self.assertIn("1. 丙项\n2. 丁项", text)
+
+
+class PlainTextListTest(unittest.TestCase):
+    """纯文本(TXT)与 PPT 只能写字符串,列表符号/编号必须由输出层补回。
+
+    历史缺陷:符号在提取阶段被剥离后没有补回,TXT 里项目符号与编号全部消失,
+    PPT 里有序列表统一显示成 "•",步骤顺序丢失。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_blocks_to_text_keeps_markers(self):
+        blocks = [
+            pdf_convert.Block("paragraph", text="引言"),
+            pdf_convert.Block("list", text="甲"),
+            pdf_convert.Block("list", text="乙"),
+            pdf_convert.Block("list", text="第一步", ordered=True, start=1),
+            pdf_convert.Block("list", text="第二步", ordered=True, start=2),
+        ]
+        self.assertEqual(
+            pdf_convert._blocks_to_text(blocks),
+            "引言\n• 甲\n• 乙\n1. 第一步\n2. 第二步",
+        )
+
+    def test_blocks_to_text_restarts_numbering_between_groups(self):
+        blocks = [
+            pdf_convert.Block("list", text="甲", ordered=True, start=1),
+            pdf_convert.Block("list", text="乙", ordered=True, start=2),
+            pdf_convert.Block("heading", text="第二节", level=2),
+            pdf_convert.Block("list", text="丙", ordered=True, start=1),
+            pdf_convert.Block("list", text="丁", ordered=True, start=2),
+        ]
+        self.assertEqual(
+            pdf_convert._blocks_to_text(blocks),
+            "1. 甲\n2. 乙\n第二节\n1. 丙\n2. 丁",
+        )
+
+    def test_blocks_to_text_without_marker_increments(self):
+        blocks = [
+            pdf_convert.Block("list", text="甲", ordered=True, start=0),
+            pdf_convert.Block("list", text="乙", ordered=True, start=0),
+            pdf_convert.Block("list", text="丙", ordered=True, start=0),
+        ]
+        self.assertEqual(pdf_convert._blocks_to_text(blocks), "1. 甲\n2. 乙\n3. 丙")
+
+    def test_table_still_tab_separated_without_prefix(self):
+        blocks = [pdf_convert.Block("table", rows=[["姓名", "金额"], ["张三", "10"]])]
+        self.assertEqual(pdf_convert._blocks_to_text(blocks), "姓名\t金额\n张三\t10")
+
+    def test_pptx_items_keep_numbering(self):
+        blocks = [
+            pdf_convert.Block("heading", text="执行步骤", level=1),
+            pdf_convert.Block("list", text="第一步", ordered=True, start=1),
+            pdf_convert.Block("list", text="第二步", ordered=True, start=2),
+            pdf_convert.Block("list", text="补充说明"),
+        ]
+        title, items = pdf_convert._pptx_texts(blocks)
+        self.assertEqual(title, "执行步骤")
+        self.assertEqual(items, ["1. 第一步", "2. 第二步", "• 补充说明"])
+
+    def test_txt_file_contains_markers(self):
+        pdf = os.path.join(self.tmp, "l.pdf")
+        make_multi_ordered_list_fixture(pdf)
+        pages = pdf_convert.extract_pages(pdf, render_images="none", keep_blocks=True)
+        out = os.path.join(self.tmp, "l.txt")
+        pdf_convert._write_txt(pages, out)
+        with open(out, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("1. 甲项", text)
+        self.assertIn("2. 乙项", text)
+        self.assertIn("1. 丙项", text)
+
+    def test_pptx_slide_keeps_ordered_list(self):
+        pdf = os.path.join(self.tmp, "p.pdf")
+        make_multi_ordered_list_fixture(pdf)
+        pages = pdf_convert.extract_pages(pdf, render_images="none", keep_blocks=True)
+        out = os.path.join(self.tmp, "p.pptx")
+        pdf_convert.to_pptx(pages, out)
+        prs = Presentation(out)
+        texts = [
+            shape.text_frame.text for slide in prs.slides for shape in slide.shapes if shape.has_text_frame
+        ]
+        joined = "\n".join(texts)
+        self.assertIn("1. 甲项", joined)
+        self.assertIn("2. 乙项", joined)
+
+
+class SecurityGuardTest(unittest.TestCase):
+    """本轮改动的安全守卫:编号 XML 只能写整数、文本一律转义、解析不得被超长输入拖死。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_list_text_cannot_inject_numbering_xml(self):
+        """列表文本若含 XML 片段,只能作为转义后的文本出现,不得进入 numbering.xml 结构。"""
+        payload = '</w:num><w:num w:numId="1"><w:abstractNumId w:val="7"/>'
+        blocks = [pdf_convert.Block("list", text=payload, ordered=True, start=1)]
+        pages = [pdf_convert.Page(num=1, text="", blocks=blocks, width=595, height=842)]
+        out = os.path.join(self.tmp, "inj.docx")
+        pdf_convert.to_docx(pages, out)
+        with zipfile.ZipFile(out) as zf:
+            document = zf.read("word/document.xml").decode("utf-8")
+            numbering = zf.read("word/numbering.xml").decode("utf-8")
+        self.assertIn("&lt;/w:num&gt;", document, "文本中的 XML 片段必须被转义")
+        self.assertNotIn(payload, document, "未转义的注入片段不得出现在文档 XML 中")
+        # 我们追加的编号定义只使用整数属性:出现非数字的 numId 即视为污染
+        for value in re.findall(r'<w:num w:numId="([^"]*)"', numbering):
+            self.assertTrue(value.isdigit(), f"numId 必须是整数,实际为 {value!r}")
+
+    def test_list_marker_parsing_survives_huge_line(self):
+        """超长行不能引发灾难性回溯(ReDoS):十万字符量级应瞬间返回。"""
+        huge = "9" * 200_000
+        start = time.perf_counter()
+        number = pdf_convert._list_marker_number(huge)
+        elapsed = time.perf_counter() - start
+        self.assertEqual(number, 0, "未以分隔符结尾的超长数字不构成编号")
+        self.assertLess(elapsed, 2.0, f"解析耗时 {elapsed:.2f}s,疑似回溯放大")
+
+    def test_body_size_sampling_keeps_cpu_bounded(self):
+        """字号统计必须带页数上限:否则大文档会被额外完整解析一遍(CPU 放大)。"""
+        self.assertGreaterEqual(pdf_convert.BODY_SIZE_SAMPLE_PAGES, 1)
+        self.assertLessEqual(pdf_convert.BODY_SIZE_SAMPLE_PAGES, 200, "采样页数上限过大,失去防护意义")
 
 
 if __name__ == "__main__":

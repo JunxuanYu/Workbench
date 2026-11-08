@@ -1,9 +1,9 @@
 {
   "name": "worklift-app",
-  "version": "1.2.1",
+  "version": "1.3.2",
   "private": true,
   "type": "module",
-  "description": "WorkLift 本地个人工作生活APP（v1.2 工具箱 + 桃夭主题）",
+  "description": "WorkLift 本地个人工作生活APP（v1.3 工具箱按页转换 + 转换保真 + 桃夭主题）",
   "scripts": {
     "start": "node server.js",
     "test": "node --test",

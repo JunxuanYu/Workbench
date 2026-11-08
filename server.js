@@ -11,6 +11,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { defaultData, validateData, migrateData } from './public/js/logic.js';
+// 页码范围解析与前端共用同一份纯函数，避免前后端判定不一致（如 1-3 与 3-1 谁非法）
+import { parsePageSelection, describePageSelection } from './public/js/tools/page-range.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -214,8 +216,21 @@ function createEnvProbe(importSpec) {
   };
 }
 
+// 构造转换调用计划（纯函数，便于单测）：参数数组 + 是否为选页 + 文件名后缀
+export function buildPdfConvertPlan({ inFile, outFile, format, layout = false, pages = '', numPages }) {
+  const selection = parsePageSelection(pages, numPages);
+  if (!selection.ok) throw new PdfHttpError(400, selection.message);
+  // 选满全部页等同于不限定，不拼 --pages（少一次 Python 侧分支）
+  const isSubset = !selection.all && selection.pages.length < numPages;
+  const args = [PDF_CLI_PATH, inFile, outFile, '--format', format];
+  // 仅 Word/PPT 支持原版式；其它格式忽略，避免把无效参数传给 Python
+  if (layout && (format === 'word' || format === 'ppt')) args.push('--layout');
+  if (isSubset) args.push('--pages', selection.pages.join(','));
+  return { args, isSubset, suffix: isSubset ? `-p${describePageSelection(selection.pages)}` : '' };
+}
+
 // 默认 PDF 工具：Node 子进程调用 python/pdf_convert.py，临时文件放在 data/.pdf-tmp/
-function createDefaultPdfTool({ now, ttlMs } = {}) {
+export function createDefaultPdfTool({ now, ttlMs } = {}) {
   const store = createPdfTokenStore({ now, ttlMs });
   const envOk = createEnvProbe('import pymupdf, docx, openpyxl, pptx');
 
@@ -246,19 +261,30 @@ function createDefaultPdfTool({ now, ttlMs } = {}) {
       const token = store.add({ file, originalName: name, numPages });
       return { token, numPages };
     },
-    async convert(token, format, { layout = false } = {}) {
+    async convert(token, format, { layout = false, pages = '' } = {}) {
       const fmt = PDF_FORMATS[format];
       if (!fmt) throw new PdfHttpError(400, '未知格式');
       const entry = store.get(token);
       if (!entry) throw new PdfHttpError(404, '会话不存在或已过期，请重新上传');
       const outFile = path.join(PDF_TMP_DIR, `${token}${fmt.ext}`);
-      const args = [PDF_CLI_PATH, entry.file, outFile, '--format', format];
-      // 仅 Word/PPT 支持原版式；其它格式忽略，避免把无效参数传给 Python
-      if (layout && (format === 'word' || format === 'ppt')) args.push('--layout');
+      // 页码范围在这里校验：非法/越界按 400 返回，避免落到 Python 层变成 500
+      const { args, suffix } = buildPdfConvertPlan({
+        inFile: entry.file,
+        outFile,
+        format,
+        layout,
+        pages,
+        numPages: entry.numPages,
+      });
       try {
         await runPdfCmd(venvPythonPath(), args);
         const buffer = fs.readFileSync(outFile);
-        return { buffer, baseName: entry.originalName.replace(/\.pdf$/i, ''), ext: fmt.ext, mime: fmt.mime };
+        return {
+          buffer,
+          baseName: entry.originalName.replace(/\.pdf$/i, '') + suffix,
+          ext: fmt.ext,
+          mime: fmt.mime,
+        };
       } catch (e) {
         throw e instanceof PdfHttpError ? e : new PdfHttpError(500, '转换失败');
       } finally {
@@ -543,13 +569,14 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
     },
   );
 
-  // 转换下载：token + 格式 -> 真实格式文件字节
+  // 转换下载：token + 格式 (+ 可选页码) -> 真实格式文件字节
   app.get('/api/tools/pdf/convert', async (req, res) => {
     try {
       const token = typeof req.query.token === 'string' ? req.query.token : '';
       const format = typeof req.query.format === 'string' ? req.query.format : '';
       const layout = req.query.layout === '1' || req.query.layout === 'true';
-      const { buffer, baseName, ext, mime } = await pdfTool.convert(token, format, { layout });
+      const pages = typeof req.query.pages === 'string' ? req.query.pages : '';
+      const { buffer, baseName, ext, mime } = await pdfTool.convert(token, format, { layout, pages });
       res.setHeader('Content-Type', mime);
       res.setHeader('Content-Disposition', contentDispositionAttachment(baseName + ext));
       res.send(buffer);
