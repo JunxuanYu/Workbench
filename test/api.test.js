@@ -287,6 +287,123 @@ test('PUT 非法 vault 结构 → 400 且数据不被破坏', async () => {
   assert.deepEqual(after.vault, before.vault, '非法请求后密码箱数据未变');
 });
 
+// ---------- v1.3.3：保存并发保护（防止旧快照覆盖导致密码箱回滚） ----------
+describe('保存并发保护', () => {
+  const BASE_HEADER = 'X-WorkLift-Base-Updated-At';
+  const token = (t) => (t === null ? 'none' : t);
+
+  function putData(data, baseToken) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (baseToken !== undefined) headers[BASE_HEADER] = baseToken;
+    return fetch(`${base}/api/data`, { method: 'PUT', headers, body: JSON.stringify(data) });
+  }
+
+  test('过期 base → 409，且旧快照不覆盖数据文件', async () => {
+    const snap = await (await fetch(`${base}/api/data`)).json();
+    const staleToken = token(snap.updatedAt);
+
+    // 窗口 A：读到旧 token 后先写入
+    const a = defaultData();
+    a.memos.push({ id: 'conc-a', text: '窗口A的修改', pinned: false });
+    const ra = await putData(a, staleToken);
+    assert.equal(ra.status, 200);
+    const freshToken = (await ra.json()).updatedAt;
+    assert.notEqual(freshToken, snap.updatedAt);
+
+    // 窗口 B：仍持有同一份旧 token，再次整份覆盖
+    const b = defaultData();
+    b.memos.push({ id: 'conc-b', text: '窗口B的旧快照', pinned: false });
+    const rb = await putData(b, staleToken);
+    assert.equal(rb.status, 409);
+    const body = await rb.json();
+    assert.equal(body.conflict, true);
+    assert.equal(body.updatedAt, freshToken, '409 应回传服务端最新 token');
+
+    const back = await (await fetch(`${base}/api/data`)).json();
+    assert.equal(back.memos.length, 1);
+    assert.equal(back.memos[0].text, '窗口A的修改', '旧快照不得覆盖新数据');
+  });
+
+  test('携带最新 base → 200，updatedAt 严格递增', async () => {
+    const cur = await (await fetch(`${base}/api/data`)).json();
+    const r1 = await putData(cur, token(cur.updatedAt));
+    assert.equal(r1.status, 200);
+    const t1 = (await r1.json()).updatedAt;
+    const r2 = await putData(cur, t1);
+    assert.equal(r2.status, 200);
+    const t2 = (await r2.json()).updatedAt;
+    assert.notEqual(t1, t2, '同一毫秒内的两次写入也要拿到不同 token');
+    assert.ok(t2 > t1, 'token 必须单调递增');
+  });
+
+  test('未携带 base 头 → 200（兼容旧客户端与脚本）', async () => {
+    const r = await putData(defaultData());
+    assert.equal(r.status, 200);
+  });
+
+  test('首次保存：磁盘 updatedAt 为 null 时 none 通过，重复 none 被拒', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklift-conc-'));
+    const file = path.join(dir, 'data.json');
+    const app = createApp(file);
+    const srv = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const b = `http://127.0.0.1:${srv.address().port}`;
+    const put = (t) =>
+      fetch(`${b}/api/data`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', [BASE_HEADER]: t },
+        body: JSON.stringify(defaultData()),
+      });
+    try {
+      const fresh = await (await fetch(`${b}/api/data`)).json();
+      assert.equal(fresh.updatedAt, null, '新建数据文件尚未保存过');
+      assert.equal((await put('none')).status, 200);
+      assert.equal((await put('none')).status, 409, '第二次仍用 none 说明客户端快照过期');
+    } finally {
+      srv.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('未带 base 时替换密码箱 salt → 409 vaultConflict，密文不被回滚', async () => {
+    let cur = await (await fetch(`${base}/api/data`)).json();
+    const original = { salt: 'b3JpZ2luYWw=', iterations: 1000, data: 'b3JpZ2luYWw=' };
+    assert.equal((await putData({ ...cur, vault: original }, token(cur.updatedAt))).status, 200);
+
+    cur = await (await fetch(`${base}/api/data`)).json();
+    const stale = { ...cur, vault: { salt: 'c3RhbGU=', iterations: 1000, data: 'c3RhbGU=' } };
+    const r = await putData(stale); // 旧客户端/旧标签页不会带 base
+    assert.equal(r.status, 409);
+    const body = await r.json();
+    assert.equal(body.vaultConflict, true);
+    const back = await (await fetch(`${base}/api/data`)).json();
+    assert.deepEqual(back.vault, original, '密码箱密文必须保持不变');
+  });
+
+  test('显式声明替换密码箱（恢复备份流程）→ 200', async () => {
+    const cur = await (await fetch(`${base}/api/data`)).json();
+    const restored = { salt: 'cmVzdG9yZWQ=', iterations: 1000, data: 'cmVzdG9yZWQ=' };
+    const r = await fetch(`${base}/api/data`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-WorkLift-Vault-Replace': '1' },
+      body: JSON.stringify({ ...cur, vault: restored }),
+    });
+    assert.equal(r.status, 200);
+    const back = await (await fetch(`${base}/api/data`)).json();
+    assert.deepEqual(back.vault, restored);
+  });
+
+  test('携带正确 base 时允许修改主密码（salt 变化）', async () => {
+    const cur = await (await fetch(`${base}/api/data`)).json();
+    const changed = { salt: 'Y2hhbmdlZA==', iterations: 1000, data: 'Y2hhbmdlZA==' };
+    const r = await putData({ ...cur, vault: changed }, token(cur.updatedAt));
+    assert.equal(r.status, 200, '合法改密不应被防回滚规则误伤');
+    const back = await (await fetch(`${base}/api/data`)).json();
+    assert.deepEqual(back.vault, changed);
+  });
+});
+
 // ---------- P11：关联文档 - 打开本地文件/文件夹接口 ----------
 test('POST /api/open 缺少路径 → 400', async () => {
   const r = await fetch(`${base}/api/open`, {

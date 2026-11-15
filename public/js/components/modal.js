@@ -21,7 +21,11 @@ export function openForm({ title, fields, values = {}, onSubmit }) {
         }
         html += '</select>';
       } else {
-        html += `<input data-k="${f.key}" type="${f.type || 'text'}" value="${esc(v)}" placeholder="${esc(f.placeholder || '')}" step="any">`;
+        // 密码框禁用浏览器自动填充：自动填入的可能是另一个已保存的密码，
+        // 会让"自以为设置的密码"和实际加密用的密码不一致（解锁时表现为密码错误）
+        const ac = f.autocomplete || (f.type === 'password' ? 'new-password' : '');
+        const acAttr = ac ? ` autocomplete="${esc(ac)}"` : '';
+        html += `<input data-k="${f.key}" type="${f.type || 'text'}" value="${esc(v)}" placeholder="${esc(f.placeholder || '')}" step="any"${acAttr}>`;
       }
       html += '</div>';
     }
