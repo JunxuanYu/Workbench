@@ -1,5 +1,5 @@
 // 数据与设置：密码箱 + 备份/恢复/清空 + 账目分类管理
-import { getState, mutate, replaceState } from '../store.js';
+import { getState, mutate, replaceState, flushSave } from '../store.js';
 import { toast } from '../components/toast.js';
 import { confirmDialog } from '../components/confirm.js';
 import { openForm } from '../components/modal.js';
@@ -322,7 +322,7 @@ export async function render(container) {
   async function unlockVaultFlow(ctx) {
     const done = await openForm({
       title: '解锁密码箱',
-      fields: [{ key: 'pw', label: '主密码', type: 'password', required: true }],
+      fields: [{ key: 'pw', label: '主密码', type: 'password', required: true, autocomplete: 'off' }],
       onSubmit: async (v) => {
         const r = await unlockVault(state.vault, v.pw);
         if (!r.ok) throw new Error(r.error);
@@ -417,11 +417,32 @@ export async function render(container) {
     render(ctx);
   }
 
+  // 密码箱变更立即落盘：改主密码必须确认写入成功才能提示。
+  // 只走 200ms 防抖再提示会出现「提示已修改、磁盘仍是旧密文」的假成功
+  //（典型场景：另一个窗口刚保存过，本次保存被并发校验拒绝）。
+  async function commitVault(nextVault, nextPassword) {
+    const prevVault = state.vault;
+    const prevPassword = vaultSession ? vaultSession.password : null;
+    mutate((s) => {
+      s.vault = nextVault;
+    });
+    try {
+      await flushSave();
+    } catch (e) {
+      mutate((s) => {
+        s.vault = prevVault;
+      });
+      if (vaultSession) vaultSession.password = prevPassword;
+      throw e;
+    }
+    if (vaultSession) vaultSession.password = nextPassword;
+  }
+
   async function changePasswordFlow(ctx) {
     const done = await openForm({
       title: '修改主密码',
       fields: [
-        { key: 'old', label: '当前主密码', type: 'password', required: true },
+        { key: 'old', label: '当前主密码', type: 'password', required: true, autocomplete: 'off' },
         { key: 'pw', label: '新主密码', type: 'password', required: true, placeholder: '至少 10 位' },
         { key: 'pw2', label: '确认新主密码', type: 'password', required: true },
       ],
@@ -433,10 +454,7 @@ export async function render(container) {
         if (!verify.ok) throw new Error('当前主密码不正确');
         const sealed = await sealVault(vaultSession.entries, v.pw, { iterations: state.vault.iterations });
         if (!sealed.ok) throw new Error(sealed.error);
-        mutate((s) => {
-          s.vault = sealed.vault;
-        });
-        vaultSession.password = v.pw;
+        await commitVault(sealed.vault, v.pw);
         toast('主密码已修改');
       },
     });
@@ -536,6 +554,16 @@ export async function render(container) {
       danger: true,
     });
     if (!ok1) return;
+    // 备份里的密码箱与当前不同 → 主密码会跟着回退，必须单独说明
+    if (state.vault && obj.vault && state.vault.salt !== obj.vault.salt) {
+      const okVault = await confirmDialog({
+        title: '密码箱将被替换',
+        message: '备份中的密码箱与当前不一致。恢复后主密码将变回该备份创建时的密码，当前主密码会失效。确定继续吗？',
+        okText: '继续恢复',
+        danger: true,
+      });
+      if (!okVault) return;
+    }
     const ok2 = await confirmDialog({
       title: '最终确认',
       message: '请再次确认，输入「确认」两字以执行恢复。',

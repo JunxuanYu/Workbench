@@ -16,10 +16,10 @@ const pkg = JSON.parse(read('package.json'));
 const lock = JSON.parse(read('package-lock.json'));
 const index = read('public/index.html');
 
-test('文档版本：package / lock 均为 v1.3.2，README 与开发计划标注 v1.1+ 系列', () => {
-  assert.equal(pkg.version, '1.3.2');
-  assert.equal(lock.version, '1.3.2');
-  assert.equal(lock.packages[''].version, '1.3.2');
+test('文档版本：package / lock 均为 v1.3.4，README 与开发计划标注 v1.1+ 系列', () => {
+  assert.equal(pkg.version, '1.3.4');
+  assert.equal(lock.version, '1.3.4');
+  assert.equal(lock.packages[''].version, '1.3.4');
   assert.match(plan, /v1\.1/);
   assert.match(readme, /13 套配色|个人笔记/);
 });
@@ -132,7 +132,7 @@ test('变更日志：存在 CHANGELOG.md，首条记录与 package.version 一�
 
 test('变更日志：覆盖 v1.0.0 以来各版本，且 v1.2.1 条目含安全加固要点', () => {
   const changelog = read('CHANGELOG.md');
-  for (const v of ['1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.2.1', '1.3.0', '1.3.1', '1.3.2']) {
+  for (const v of ['1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.2.1', '1.3.0', '1.3.1', '1.3.2', '1.3.3', '1.3.4']) {
     assert.match(changelog, new RegExp(`## v${v.replace(/\./g, '\\.')}`), `缺少 v${v} 记录`);
   }
   assert.match(changelog, /inspectOpenTarget|40 项/);
@@ -169,6 +169,58 @@ test('验收报告：docs/test 下存在 v1.3.2 转换保真报告', () => {
   assert.ok(existsSync(report), '应有本轮转换保真修复的验收报告');
   const body = readFileSync(report, 'utf8');
   assert.match(body, /问题 1/);
+  assert.match(body, /全量/);
+});
+
+// ---------- v1.3.3 迭代（保存并发保护 / 密码箱防回滚）文档同步 ----------
+test('开发计划：记录 v1.3.3 并发保护的根因与四个层面', () => {
+  assert.match(plan, /v1\.3\.3/);
+  assert.match(plan, /X-WorkLift-Base-Updated-At/);
+  assert.match(plan, /X-WorkLift-Vault-Replace/);
+  assert.match(plan, /nextUpdatedAt/);
+  assert.match(plan, /autocomplete="new-password"/);
+});
+
+test('变更日志：v1.3.3 条目包含根因、防护头与测试数量', () => {
+  const changelog = read('CHANGELOG.md');
+  const section = changelog.split('## v1.3.3')[1]?.split('## v1.3.2')[0] ?? '';
+  assert.match(section, /没有并发校验/);
+  assert.match(section, /X-WorkLift-Base-Updated-At/);
+  assert.match(section, /X-WorkLift-Vault-Replace/);
+  assert.match(section, /381\/381/);
+});
+
+// ---------- v1.3.4 迭代（第二次安全审计：写穿 / UNC 解析 / CSP 纵深）文档同步 ----------
+test('开发计划：记录 v1.3.4 三项安全修复与测试数量', () => {
+  assert.match(plan, /v1\.3\.4/);
+  assert.match(plan, /SEC-09/);
+  assert.match(plan, /SEC-10/);
+  assert.match(plan, /lstatSync/);
+  assert.match(plan, /395/);
+});
+
+test('变更日志：v1.3.4 条目包含三项缺陷、防护要点与测试数量', () => {
+  const changelog = read('CHANGELOG.md');
+  const section = changelog.split('## v1.3.4')[1]?.split('## v1.3.3')[0] ?? '';
+  assert.match(section, /预置同名临时文件/);
+  assert.match(section, /NetNTLM/);
+  assert.match(section, /object-src/);
+  assert.match(section, /395\/395/);
+});
+
+test('验收报告：docs/test 下存在 v1.3.4 安全审计报告', () => {
+  const report = join(root, 'docs/test/Test-2026-11-15-安全审计与漏洞修复-Tulip.md');
+  assert.ok(existsSync(report), '应有本轮安全审计的验收报告');
+  const body = readFileSync(report, 'utf8');
+  assert.match(body, /SEC-09/);
+  assert.match(body, /全量/);
+});
+
+test('验收报告：docs/test 下存在 v1.3.3 密码箱并发保护报告', () => {
+  const report = join(root, 'docs/test/Test-2026-11-08-密码箱主密码被改修复-Tulip.md');
+  assert.ok(existsSync(report), '应有本轮修复的验收报告');
+  const body = readFileSync(report, 'utf8');
+  assert.match(body, /根因/);
   assert.match(body, /全量/);
 });
 

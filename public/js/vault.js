@@ -62,6 +62,10 @@ async function aesGcmDecrypt(key, dataB64) {
 
 export function validateMasterPassword(pw) {
   const s = String(pw || '');
+  // 首尾空白会被算进 PBKDF2 输入，但肉眼看不出来：设置时带了空格、之后手输不带，
+  // 就会表现成"密码被改了"。这里直接拒绝，避免造出无法复现的密码。
+  // 注意：解锁（unlockVault）不走本函数，历史含空格的密码仍可正常解开。
+  if (s !== s.trim()) return { ok: false, error: '主密码首尾不能包含空格' };
   if (s.length < 10) return { ok: false, error: '主密码至少 10 位' };
   return { ok: true };
 }

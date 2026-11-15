@@ -43,7 +43,8 @@ function localDateStr(d) {
 }
 
 function ensureDataFile(filePath) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  // 数据目录仅属主可访问（POSIX）：目录内既有密码箱密文，也有笔记/账目明文
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   if (!fs.existsSync(filePath)) writeAtomic(filePath, defaultData());
 }
 
@@ -52,10 +53,43 @@ function readData(filePath) {
   return migrateData(JSON.parse(fs.readFileSync(filePath, 'utf8')));
 }
 
-function writeAtomic(filePath, data) {
-  const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(tmp, filePath);
+// 原子写入：临时文件用 CSPRNG 命名 + wx 独占创建，再 rename 覆盖目标。
+// 不能用固定名 `<file>.tmp`：该名字可被预测，若目录内已被预置同名硬链接/符号链接，
+// writeFileSync 会跟随链接把 JSON 写到链接指向的任意文件（写穿）；两个实例同时保存
+// 还会共用同一临时名互相截断。rename 不跟随链接，最终替换的是链接本身。
+export function writeAtomic(filePath, data) {
+  const tmp = `${filePath}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), {
+      encoding: 'utf8',
+      flag: 'wx', // 独占创建：目标已存在即失败，绝不跟随已存在的链接
+      mode: 0o600, // 数据文件含笔记/账目明文，仅属主可读写（POSIX；Windows 由 ACL 决定）
+    });
+    fs.renameSync(tmp, filePath);
+  } catch (e) {
+    try {
+      fs.rmSync(tmp, { force: true }); // 只清理自己这一次的临时文件
+    } catch {
+      /* 忽略：清理失败不影响错误上抛 */
+    }
+    throw e;
+  }
+}
+
+// 保存并发保护：客户端用该头回传读取时的 updatedAt（从未保存过则传 none）。
+// 不一致说明另一个窗口已经写入，必须拒绝整份覆盖，否则旧快照会把密码箱密文一起回滚。
+const BASE_HEADER = 'x-worklift-base-updated-at';
+const BASE_NONE = 'none';
+// 恢复备份/清空等显式覆盖场景，必须带该头声明"我知道会替换密码箱密文"
+const VAULT_REPLACE_HEADER = 'x-worklift-vault-replace';
+
+// 生成严格单调递增的 updatedAt，兼作并发校验 token：
+// 同一毫秒内连续写入也要拿到不同值，避免校验形同虚设。
+export function nextUpdatedAt(prev) {
+  const now = Date.now();
+  const prevMs = prev ? Date.parse(prev) : NaN;
+  const ms = Number.isFinite(prevMs) && prevMs >= now ? prevMs + 1 : now;
+  return new Date(ms).toISOString();
 }
 
 // 确保临时目录存在（并发启动多个实例时 mkdir 递归不报错）
@@ -365,39 +399,100 @@ const WINDOWS_CMD_META_RE = /["&|<>^%()\r\n]/;
 export const BLOCKED_OPEN_EXT_RE =
   /\.(?:bat|cmd|com|exe|scr|pif|msi|msp|msc|cpl|chm|hta|lnk|scf|js|jse|vbs|vbe|vb|ws|wsf|wsh|wsc|ps1|psm1|psd1|ps1xml|pssc|cdxml|jar|jnlp|application|appref-ms|gadget|settingcontent-ms|diagcab|appx|appxbundle|msix|msixbundle|reg|inf)$/i;
 
+// UNC 网络路径（\\server\share 或 //server/share）：打开/解析它会向远程 SMB 共享发起认证握手，
+// 导致 NetNTLM 凭据泄露。本工具仅面向本机文件/文件夹，任何解析阶段都必须拒绝。
+function isUncPath(p) {
+  return /^(\\\\|\/\/)/.test(String(p || ''));
+}
+
+// Windows 链接目标可能带 NT 对象前缀（GetFinalPathName / junction 常见）：
+//   \\?\C:\dir\x  -> C:\dir\x      \??\C:\dir\x      -> C:\dir\x
+//   \\?\UNC\srv\share -> \\srv\share   \??\UNC\srv\share -> \\srv\share
+// 不归一化就会漏判 UNC，直接把远程路径放进 start。
+export function normalizeLinkTarget(target) {
+  const t = String(target || '');
+  if (/^\\\\\?\\UNC\\/i.test(t)) return `\\\\${t.slice(8)}`;
+  if (/^\\\\\?\\/i.test(t)) return t.slice(4);
+  if (/^\\\?\?\\UNC\\/i.test(t)) return `\\\\${t.slice(8)}`;
+  if (/^\\\?\?\\/i.test(t)) return t.slice(4);
+  return t;
+}
+
+const MAX_LINK_HOPS = 8;
+
+// 逐跳解析符号链接/junction，且**只用 lstat/readlink 读链接目标字符串**（不触网、不打开目标），
+// 每跳先判 UNC 再往下走。这样"链接指向 \\server\share"在 stat 之前就被拒，
+// 避免 statSync/realpathSync 顺着链接向远程共享发认证（SEC-10）。
+function resolveLocalLinks(p, { lstatSync, readlinkSync }) {
+  let cur = p;
+  for (let hop = 0; hop <= MAX_LINK_HOPS; hop++) {
+    let lst;
+    try {
+      lst = lstatSync(cur);
+    } catch {
+      return { ok: false, status: 404, error: `本地路径不存在：${p}` };
+    }
+    if (!lst.isSymbolicLink()) return { ok: true, path: cur };
+    let target;
+    try {
+      target = readlinkSync(cur);
+    } catch {
+      return { ok: false, status: 400, error: '无法解析符号链接目标，已拒绝' };
+    }
+    const resolved = normalizeLinkTarget(target);
+    if (isUncPath(resolved)) return { ok: false, status: 400, error: '不支持网络路径（UNC）' };
+    cur = path.resolve(path.dirname(cur), resolved);
+  }
+  return { ok: false, status: 400, error: '符号链接层级过深，已拒绝' };
+}
+
 // 判定「打开本地路径」请求是否安全。纯逻辑 + 可注入 fs，便于单元测试。
 // 返回 { ok, target } 或 { ok:false, status, error }
 export function inspectOpenTarget(
   rawPath,
-  { platform = process.platform, statSync = fs.statSync, realpathSync = fs.realpathSync } = {},
+  {
+    platform = process.platform,
+    lstatSync = fs.lstatSync,
+    readlinkSync = fs.readlinkSync,
+    statSync = fs.statSync,
+    realpathSync = fs.realpathSync,
+  } = {},
 ) {
   const p = typeof rawPath === 'string' ? rawPath.trim() : '';
   if (!p) return { ok: false, status: 400, error: '缺少要打开的本地路径' };
   if (platform === 'win32' && WINDOWS_CMD_META_RE.test(p)) {
     return { ok: false, status: 400, error: '路径包含 Windows 命令特殊字符，已拒绝' };
   }
-  // 拒绝 UNC 网络路径（\\server\share 或 //server/share）：会触发系统向远程 SMB 共享发起
-  // 认证握手（NetNTLM 泄露），本工具仅面向本机文件/文件夹
-  if (/^(\\\\|\/\/)/.test(p)) return { ok: false, status: 400, error: '不支持网络路径（UNC）' };
+  if (isUncPath(p)) return { ok: false, status: 400, error: '不支持网络路径（UNC）' };
+
+  // 先解析链接再 stat：顺序很关键——statSync 会跟随链接，指向 UNC 的链接
+  // 在这一步就已经把认证握手发出去了，事后再校验已经晚了。
+  const link = resolveLocalLinks(p, { lstatSync, readlinkSync });
+  if (!link.ok) return link;
+  const resolved = link.path;
 
   let st;
   try {
-    st = statSync(p);
+    st = statSync(resolved);
   } catch {
     return { ok: false, status: 404, error: `本地路径不存在：${p}` };
   }
   if (!st.isFile() && !st.isDirectory()) return { ok: false, status: 400, error: '路径既不是文件也不是文件夹' };
-  if (!st.isFile()) return { ok: true, target: p };
 
-  // 目录可直接打开；文件需按「请求路径」与「真实路径」双份校验：
-  // 符号链接/硬链接可让 notes.txt 实际指向 evil.exe，只看后缀会被绕过
-  let real = p;
+  // 真实路径二次校验：链接链路的终点若仍是 UNC（如本地中转链接），同样拒绝
+  let real = resolved;
   try {
-    real = realpathSync(p);
+    real = realpathSync(resolved);
   } catch {
-    /* 解析失败时沿用原路径（仍需通过后缀校验） */
+    /* 解析失败时沿用已归一化的本地路径（仍需通过下方后缀校验） */
   }
-  if (BLOCKED_OPEN_EXT_RE.test(p) || BLOCKED_OPEN_EXT_RE.test(real)) {
+  if (isUncPath(real)) return { ok: false, status: 400, error: '不支持网络路径（UNC）' };
+
+  if (st.isDirectory()) return { ok: true, target: real };
+
+  // 文件需按「请求路径」「解析后路径」「真实路径」三份校验：
+  // 符号链接/硬链接可让 notes.txt 实际指向 evil.exe，只看后缀会被绕过
+  if (BLOCKED_OPEN_EXT_RE.test(p) || BLOCKED_OPEN_EXT_RE.test(resolved) || BLOCKED_OPEN_EXT_RE.test(real)) {
     return { ok: false, status: 400, error: '不支持打开可执行/脚本文件' };
   }
   return { ok: true, target: real };
@@ -411,9 +506,13 @@ export function contentDispositionAttachment(fileName) {
   );
   return `attachment; filename*=UTF-8''${encoded}`;
 }
+// CSP：只允许自源脚本；插件内容（object/embed）、子框架、Worker、manifest 一律禁止。
+// 这几类此前依赖 default-src 'self' 兜底，等于「同源即可加载」，对本地服务没有意义——
+// 本应用不使用插件/子框架/Worker，显式关掉可收窄一旦出现注入点时的利用面。
 const CSP_VALUE =
   "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
-  "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+  "script-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; " +
+  "manifest-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 
 export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
   ensureDataFile(dataFile);
@@ -431,6 +530,7 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+    res.setHeader('X-DNS-Prefetch-Control', 'off');
     next();
   });
 
@@ -509,7 +609,39 @@ export function createApp(dataFile = DEFAULT_DATA_FILE, opts = {}) {
   app.put('/api/data', (req, res) => {
     const check = validateData(req.body);
     if (!check.ok) return res.status(400).json({ error: check.errors.join('; ') });
-    req.body.updatedAt = new Date().toISOString();
+    let current;
+    try {
+      current = readData(dataFile);
+    } catch {
+      current = null; // 文件缺失/损坏：按无并发冲突处理，本次写入会重建
+    }
+    // 乐观并发校验：客户端回传读取时的 updatedAt（从未保存过回传 'none'）。
+    // 未携带该头视为旧客户端/脚本，保持无条件覆盖（兼容既有调用方）。
+    const baseHeader = req.get(BASE_HEADER);
+    if (baseHeader !== undefined) {
+      const expected = typeof current?.updatedAt === 'string' ? current.updatedAt : '';
+      const base = baseHeader === BASE_NONE ? '' : baseHeader;
+      if (base !== expected) {
+        return res.status(409).json({
+          error: '数据已被其他窗口更新，请刷新后再保存',
+          conflict: true,
+          updatedAt: expected || null,
+        });
+      }
+    }
+    // 密码箱防回滚：salt 变化代表主密码被换掉。只有客户端能证明自己基于最新数据
+    //（携带并通过 base 校验）时才视为合法改密；否则必须显式声明（恢复备份流程），
+    // 避免旧标签页/旧脚本用旧密文把主密码悄悄"改回去"。
+    const vaultSaltChanged = !!current?.vault && !!req.body.vault && current.vault.salt !== req.body.vault.salt;
+    if (vaultSaltChanged && baseHeader === undefined && req.get(VAULT_REPLACE_HEADER) !== '1') {
+      return res.status(409).json({
+        error: '密码箱密文与当前数据不一致，已拒绝写入。请刷新页面后重试；若是恢复备份，请重新走恢复流程',
+        conflict: true,
+        vaultConflict: true,
+        updatedAt: typeof current.updatedAt === 'string' ? current.updatedAt : null,
+      });
+    }
+    req.body.updatedAt = nextUpdatedAt(current?.updatedAt);
     try {
       writeAtomic(dataFile, req.body);
       res.json({ ok: true, updatedAt: req.body.updatedAt });

@@ -5,12 +5,27 @@ export async function getData() {
   return r.json();
 }
 
-export async function saveData(obj) {
+export async function saveData(obj, baseUpdatedAt, { allowVaultReplace = false } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  // 乐观并发校验：带上读取时的 updatedAt（null → 'none'）；不传则服务端按无条件覆盖处理
+  if (baseUpdatedAt !== undefined) {
+    headers['X-WorkLift-Base-Updated-At'] = baseUpdatedAt === null ? 'none' : String(baseUpdatedAt);
+  }
+  // 显式覆盖（恢复备份/清空）才允许替换密码箱密文，防止旧快照把主密码改回去
+  if (allowVaultReplace) headers['X-WorkLift-Vault-Replace'] = '1';
   const r = await fetch('/api/data', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(obj),
   });
+  if (r.status === 409) {
+    const e = await r.json().catch(() => ({}));
+    const err = new Error(e.error || '数据已被其他窗口更新，请刷新后再保存');
+    err.conflict = true;
+    err.vaultConflict = e.vaultConflict === true;
+    err.updatedAt = e.updatedAt ?? null;
+    throw err;
+  }
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
     throw new Error(e.error || '保存失败');

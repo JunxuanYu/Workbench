@@ -6,7 +6,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { createApp, contentDispositionAttachment, inspectOpenTarget, sweepStaleFiles } from '../server.js';
+import {
+  createApp,
+  contentDispositionAttachment,
+  inspectOpenTarget,
+  normalizeLinkTarget,
+  sweepStaleFiles,
+} from '../server.js';
 import { defaultData, migrateData, validateData } from '../public/js/logic.js';
 import { renderMarkdown, safeUrl } from '../public/js/markdown.js';
 import { DEFAULT_ITERATIONS, MAX_ITERATIONS, createVault, unlockVault, validateVault } from '../public/js/vault.js';
@@ -233,6 +239,18 @@ describe('API 边界：同源/Host 守卫与危险请求', () => {
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(r.headers.get('x-powered-by'), null);
   });
+
+  test('CSP 纵深：插件/子框架/Worker/manifest 显式禁止，且未放开 unsafe-eval', async () => {
+    const r = await fetch(`${base}/`);
+    const csp = r.headers.get('content-security-policy') || '';
+    for (const directive of ["object-src 'none'", "frame-src 'none'", "worker-src 'none'", "manifest-src 'none'"]) {
+      assert.ok(csp.includes(directive), `CSP 缺少 ${directive}：${csp}`);
+    }
+    assert.doesNotMatch(csp, /unsafe-eval/i, '不得放开 unsafe-eval');
+    assert.match(csp, /base-uri 'self'/, 'base-uri 必须受限，防止 <base> 劫持相对路径');
+    assert.match(csp, /form-action 'self'/, 'form-action 必须限自源，防止表单外发');
+    assert.equal(r.headers.get('x-dns-prefetch-control'), 'off');
+  });
 });
 
 describe('数据层：主题/笔记形状校验与迁移', () => {
@@ -307,6 +325,8 @@ test('工具箱 UI：文件名校验在前（validatePdfFile），文件名仅�
 // ---------- 2026-11-01 安全审计：/api/open 执行面收敛 ----------
 describe('打开本地文件：执行类扩展名与真实路径校验', () => {
   const asFile = () => ({ isFile: () => true, isDirectory: () => false });
+  // 非链接文件的 lstat 结果：走"无链接"分支，便于单独验证后缀/真实路径逻辑
+  const noLink = () => ({ isSymbolicLink: () => false });
 
   test('覆盖 Windows 上以「文档」面貌出现的执行入口（.cpl/.msc/.chm/.settingcontent-ms 等）', () => {
     const execExts = [
@@ -332,7 +352,12 @@ describe('打开本地文件：执行类扩展名与真实路径校验', () => {
       'application',
     ];
     const missed = execExts.filter(
-      (ext) => !inspectOpenTarget(`C:\\tmp\\evil.${ext}`, { platform: 'win32', statSync: asFile }).error,
+      (ext) =>
+        !inspectOpenTarget(`C:\\tmp\\evil.${ext}`, {
+          platform: 'win32',
+          lstatSync: noLink,
+          statSync: asFile,
+        }).error,
     );
     assert.deepEqual(missed, [], `以下执行类扩展名未被拦截：${missed.join(', ')}`);
   });
@@ -340,6 +365,7 @@ describe('打开本地文件：执行类扩展名与真实路径校验', () => {
   test('按真实路径二次校验：notes.txt 指向 evil.exe 时拒绝（符号链接/硬链接绕过）', () => {
     const check = inspectOpenTarget('C:\\tmp\\notes.txt', {
       platform: 'win32',
+      lstatSync: noLink,
       statSync: asFile,
       realpathSync: () => 'C:\\tmp\\evil.exe',
     });
@@ -350,6 +376,7 @@ describe('打开本地文件：执行类扩展名与真实路径校验', () => {
   test('普通文档与目录放行，返回真实路径', () => {
     const doc = inspectOpenTarget('C:\\tmp\\报告.pdf', {
       platform: 'win32',
+      lstatSync: noLink,
       statSync: asFile,
       realpathSync: () => 'C:\\tmp\\报告.pdf',
     });
@@ -358,9 +385,12 @@ describe('打开本地文件：执行类扩展名与真实路径校验', () => {
 
     const dir = inspectOpenTarget('C:\\tmp', {
       platform: 'win32',
+      lstatSync: noLink,
       statSync: () => ({ isFile: () => false, isDirectory: () => true }),
+      realpathSync: () => 'C:\\真实目录',
     });
     assert.equal(dir.ok, true);
+    assert.equal(dir.target, 'C:\\真实目录', '目录同样应返回真实路径');
   });
 
   test('空路径/UNC/不存在分别返回 400/400/404', () => {
@@ -368,7 +398,7 @@ describe('打开本地文件：执行类扩展名与真实路径校验', () => {
     assert.equal(inspectOpenTarget('\\\\server\\share\\a.txt').status, 400);
     const missing = inspectOpenTarget('C:\\no\\such\\file.md', {
       platform: 'win32',
-      statSync: () => {
+      lstatSync: () => {
         throw new Error('ENOENT');
       },
     });
@@ -377,9 +407,14 @@ describe('打开本地文件：执行类扩展名与真实路径校验', () => {
 
   test('Windows 命令元字符仅在 win32 拒绝（其它平台允许 & 等合法文件名字符）', () => {
     const st = asFile;
-    assert.equal(inspectOpenTarget('C:\\a&b.txt', { platform: 'win32', statSync: st }).status, 400);
+    assert.equal(inspectOpenTarget('C:\\a&b.txt', { platform: 'win32', lstatSync: noLink, statSync: st }).status, 400);
     assert.equal(
-      inspectOpenTarget('/home/u/a&b.txt', { platform: 'darwin', statSync: st, realpathSync: (p) => p }).ok,
+      inspectOpenTarget('/home/u/a&b.txt', {
+        platform: 'darwin',
+        lstatSync: noLink,
+        statSync: st,
+        realpathSync: (p) => p,
+      }).ok,
       true,
     );
   });
@@ -424,6 +459,104 @@ describe('打开本地文件：执行类扩展名与真实路径校验', () => {
   test('安全响应头新增 X-Permitted-Cross-Domain-Policies: none', async () => {
     const r = await fetch(`${base}/`);
     assert.equal(r.headers.get('x-permitted-cross-domain-policies'), 'none');
+  });
+});
+
+// ---------- 2026-11-15 安全审计：链接目标指向 UNC 的解析期绕过（SEC-10） ----------
+describe('打开本地文件：链接目标 UNC 与目录真实路径校验（SEC-10）', () => {
+  const noLink = () => ({ isSymbolicLink: () => false });
+  const asFile = () => ({ isFile: () => true, isDirectory: () => false });
+  // 一旦被调用即说明校验顺序错误：顺着链接 stat/realpath 就已经向远程 SMB 发认证了
+  const mustNotTouch = () => {
+    throw new Error('拒绝前不应访问文件系统');
+  };
+
+  test('符号链接指向 UNC 时拒绝，且不调用 stat/realpath（不发 SMB 认证）', () => {
+    const check = inspectOpenTarget('C:\\tmp\\报告.pdf', {
+      platform: 'win32',
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+      readlinkSync: () => '\\\\evil.example.com\\share\\报告.pdf',
+      statSync: mustNotTouch,
+      realpathSync: mustNotTouch,
+    });
+    assert.equal(check.status, 400);
+    assert.match(check.error, /UNC/);
+  });
+
+  test('junction 的 \\\\?\\UNC\\ 前缀同样被识别为 UNC', () => {
+    const check = inspectOpenTarget('C:\\tmp\\docs', {
+      platform: 'win32',
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+      readlinkSync: () => '\\\\?\\UNC\\evil.example.com\\share',
+      statSync: mustNotTouch,
+    });
+    assert.equal(check.status, 400);
+    assert.match(check.error, /UNC/);
+  });
+
+  test('目录链接指向 UNC 不再被放行（旧实现目录分支直接 return）', () => {
+    const check = inspectOpenTarget('C:\\Users\\me\\Documents', {
+      platform: 'win32',
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+      readlinkSync: () => '//evil.example.com/share/docs',
+      statSync: mustNotTouch,
+    });
+    assert.equal(check.ok, false);
+    assert.equal(check.status, 400);
+  });
+
+  test('多跳链接逐跳校验：a→b→\\\\srv\\share 在第二跳被拒', () => {
+    const check = inspectOpenTarget('C:\\tmp\\a', {
+      platform: 'win32',
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+      readlinkSync: (cur) => (cur.endsWith('a') ? 'b' : '\\\\srv\\share'),
+      statSync: mustNotTouch,
+    });
+    assert.equal(check.status, 400);
+    assert.match(check.error, /UNC/);
+  });
+
+  test('链接成环时快速失败，不会无限解析', () => {
+    const check = inspectOpenTarget('C:\\tmp\\loop', {
+      platform: 'win32',
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+      readlinkSync: () => 'loop',
+      statSync: mustNotTouch,
+    });
+    assert.equal(check.status, 400);
+    assert.match(check.error, /层级过深/);
+  });
+
+  test('本地文件链接正常放行，并返回真实路径', () => {
+    let hops = 0;
+    const check = inspectOpenTarget('C:\\tmp\\快捷.pdf', {
+      platform: 'win32',
+      // 只有第一跳是链接，第二跳（真实文件）不是
+      lstatSync: () => ({ isSymbolicLink: () => hops++ === 0 }),
+      readlinkSync: () => 'C:\\docs\\真实.pdf',
+      statSync: asFile,
+      realpathSync: () => 'C:\\docs\\真实.pdf',
+    });
+    assert.equal(check.ok, true);
+    assert.equal(check.target, 'C:\\docs\\真实.pdf');
+  });
+
+  test('真实路径仍为 UNC 时兜底拒绝（本地中转链接）', () => {
+    const check = inspectOpenTarget('/home/u/doc.pdf', {
+      platform: 'darwin',
+      lstatSync: noLink,
+      statSync: asFile,
+      realpathSync: () => '//srv/share/doc.pdf',
+    });
+    assert.equal(check.status, 400);
+    assert.match(check.error, /UNC/);
+  });
+
+  test('normalizeLinkTarget 归一化 Windows NT 对象前缀', () => {
+    assert.equal(normalizeLinkTarget('\\\\?\\UNC\\srv\\share'), '\\\\srv\\share');
+    assert.equal(normalizeLinkTarget('\\\\?\\C:\\dir\\x'), 'C:\\dir\\x');
+    assert.equal(normalizeLinkTarget('\\??\\C:\\dir\\x'), 'C:\\dir\\x');
+    assert.equal(normalizeLinkTarget('C:\\dir\\x'), 'C:\\dir\\x');
   });
 });
 

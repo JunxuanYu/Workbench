@@ -1,6 +1,7 @@
 // 密码箱纯逻辑测试（vault.js 不依赖 DOM，Node 直接 import；测试使用低迭代次数加速）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   DEFAULT_ITERATIONS,
   MAX_ITERATIONS,
@@ -25,6 +26,47 @@ test('主密码：少于10位拒绝，10位及以上通过', () => {
   assert.deepEqual(validateMasterPassword(undefined), { ok: false, error: '主密码至少 10 位' });
   assert.deepEqual(validateMasterPassword('123456789'), { ok: false, error: '主密码至少 10 位' });
   assert.deepEqual(validateMasterPassword('1234567890'), { ok: true });
+  // 首尾空白会被计入 PBKDF2 输入但肉眼不可见 → 设置/修改时直接拒绝
+  assert.deepEqual(validateMasterPassword(' 1234567890'), { ok: false, error: '主密码首尾不能包含空格' });
+  assert.deepEqual(validateMasterPassword('1234567890 '), { ok: false, error: '主密码首尾不能包含空格' });
+  assert.deepEqual(validateMasterPassword('1234567890\u3000'), { ok: false, error: '主密码首尾不能包含空格' });
+  assert.deepEqual(validateMasterPassword('12345 67890'), { ok: true }, '中间空格合法');
+});
+
+test('createVault / sealVault 拒绝首尾空格的主密码（避免造出无法复现的密码）', async () => {
+  const created = await createVault(' 1234567890', ITER);
+  assert.equal(created.ok, false);
+  assert.match(created.error, /空格/);
+  const sealed = await sealVault([], '1234567890 ', { iterations: ITER });
+  assert.equal(sealed.ok, false);
+  assert.match(sealed.error, /空格/);
+});
+
+test('历史遗留：含首尾空格的主密码仍可解锁（不 trim，不破坏存量密码箱）', async () => {
+  // 按旧规则手工构造 vault（旧版允许带空格），验证 unlockVault 原样使用输入
+  const enc = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const material = await crypto.subtle.importKey('raw', enc.encode(' legacy-pass '), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: ITER, hash: 'SHA-256' },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt'],
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode('[]'));
+  const blob = new Uint8Array(iv.length + cipher.byteLength);
+  blob.set(iv, 0);
+  blob.set(new Uint8Array(cipher), iv.length);
+  const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+  const vault = { salt: b64(salt), iterations: ITER, data: b64(blob) };
+
+  const ok = await unlockVault(vault, ' legacy-pass ');
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.entries, []);
+  const bad = await unlockVault(vault, 'legacy-pass');
+  assert.equal(bad.ok, false, '去掉空格后应解不开，证明确实不 trim');
 });
 
 // ---------- 创建 / 解锁 ----------
@@ -205,4 +247,49 @@ test('validateEntry：名称必填、账号密码至少其一、返回清洗后�
     ok: true,
     entry: { name: 'WiFi', account: '', secret: 'p', notes: '' },
   });
+});
+
+// ---------- 修改主密码（v1.3.3） ----------
+test('修改主密码：重新加盐后新密码可解锁、旧密码失效、条目保留', async () => {
+  const created = await createVault('old-master-1', ITER);
+  assert.equal(created.ok, true);
+
+  const added = addVaultEntry([], { name: 'GitHub', account: 'me', secret: 's3cret' });
+  const sealedOld = await sealVault(added.entries, 'old-master-1', {
+    salt: created.vault.salt,
+    iterations: ITER,
+  });
+  const stillOk = await unlockVault(sealedOld.vault, 'old-master-1');
+  assert.equal(stillOk.ok, true, '同盐重封不应影响旧密码');
+  assert.equal(stillOk.entries.length, 1);
+
+  // 改密：省略 salt → 重新加盐
+  const sealedNew = await sealVault(added.entries, 'new-master-2', { iterations: ITER });
+  assert.notEqual(sealedNew.vault.salt, sealedOld.vault.salt, '改密必须换盐');
+
+  const withNew = await unlockVault(sealedNew.vault, 'new-master-2');
+  assert.equal(withNew.ok, true);
+  assert.equal(withNew.entries[0].name, 'GitHub', '条目不应丢失');
+
+  const withOld = await unlockVault(sealedNew.vault, 'old-master-1');
+  assert.equal(withOld.ok, false, '旧密码必须失效');
+});
+
+test('改密流程：先确认落盘成功再提示，失败回滚（静态守卫）', () => {
+  const src = readFileSync(new URL('../public/js/pages/settings.js', import.meta.url), 'utf8');
+  const commitStart = src.indexOf('async function commitVault');
+  const changeStart = src.indexOf('async function changePasswordFlow');
+  assert.ok(commitStart > -1, '应存在 commitVault：改密需要立即落盘');
+  assert.ok(changeStart > commitStart, 'commitVault 应定义在改密流程之前');
+
+  const commit = src.slice(commitStart, changeStart);
+  assert.match(commit, /await flushSave\(\);/, '改密必须等待落盘');
+  assert.match(commit, /s\.vault = prevVault/, '落盘失败应回滚旧密文');
+  assert.match(commit, /vaultSession\.password = prevPassword/, '落盘失败应回滚内存密码');
+
+  const change = src.slice(changeStart, src.indexOf('function entryRowEl'));
+  assert.ok(
+    change.indexOf('commitVault') > -1 && change.indexOf('commitVault') < change.indexOf('主密码已修改'),
+    '「主密码已修改」提示必须在落盘成功之后',
+  );
 });
